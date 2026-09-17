@@ -58,7 +58,7 @@ Commit `.claude/build-plans/` in your repo; plans, checks and results are part o
 - Weak checks pass trivially. The reference file exists to make you write good ones; nothing else can.
 - A builder can weaken a test inside the code. That is what review tier 1 is for.
 - The lock proves the scripts at acceptance time match what the plan was written against; it cannot stop a builder from editing the plugin cache mid-milestone, only catch it at the next hook or acceptance.
-- `guard-builder.sh` and `verify-milestone.sh` identify builders by the `agent_type` Claude Code reports (`plan-and-verify:builder-sonnet`, `plan-and-verify:builder-opus`). The `hooks:` in the builder agents' frontmatter did not fire in a real install and nothing relies on them.
+- `guard-builder.sh` and `verify-milestone.sh` identify builders by the `agent_type` Claude Code reports (`plan-and-verify:builder-sonnet`, `plan-and-verify:builder-opus`). Claude Code ignores `hooks:`, `permissionMode` and `mcpServers` in a *plugin's* agent frontmatter, so every guard here lives in `hooks/hooks.json`; the builder agents carry no frontmatter hooks at all, because one would read as a safety net that never fires.
 - Checks that need a live service need that service; give it a milestone 0.x.
 - Parallel groups are opt-in and rare; the hooks assume one working tree.
 - No wall-clock limit on a subagent; builders have `maxTurns: 60`, checks have timeouts. Size milestones accordingly.

@@ -6,48 +6,6 @@ color: magenta
 tools: Read, Edit, Write, Grep, Glob, Bash
 disallowedTools: Agent, Task, NotebookEdit
 maxTurns: 60
-hooks:
-  PreToolUse:
-    - matcher: Edit|Write
-      hooks:
-        - type: command
-          if: "Edit(.claude/build-plans/**/checks.json)"
-          command: bash
-          args: ["-c", "echo 'checks.json is owned by the planner. If a check is wrong, report STATUS: BLOCKED.' >&2; exit 2"]
-        - type: command
-          if: "Write(.claude/build-plans/**/checks.json)"
-          command: bash
-          args: ["-c", "echo 'checks.json is owned by the planner. If a check is wrong, report STATUS: BLOCKED.' >&2; exit 2"]
-    - matcher: Bash
-      hooks:
-        - type: command
-          if: "Bash(git commit *)"
-          command: bash
-          args: ["-c", "echo 'Builders never run git commit; the main agent commits accepted work.' >&2; exit 2"]
-        - type: command
-          if: "Bash(git push *)"
-          command: bash
-          args: ["-c", "echo 'Builders never run git push; the main agent commits accepted work.' >&2; exit 2"]
-        - type: command
-          if: "Bash(git stash *)"
-          command: bash
-          args: ["-c", "echo 'Builders never run git stash; the main agent commits accepted work.' >&2; exit 2"]
-        - type: command
-          if: "Bash(git reset *)"
-          command: bash
-          args: ["-c", "echo 'Builders never run git reset; the main agent commits accepted work.' >&2; exit 2"]
-        - type: command
-          if: "Bash(git checkout *)"
-          command: bash
-          args: ["-c", "echo 'Builders never run git checkout; the main agent commits accepted work.' >&2; exit 2"]
-        - type: command
-          if: "Bash(git rebase *)"
-          command: bash
-          args: ["-c", "echo 'Builders never run git rebase; the main agent commits accepted work.' >&2; exit 2"]
-        - type: command
-          if: "Bash(git merge *)"
-          command: bash
-          args: ["-c", "echo 'Builders never run git merge; the main agent commits accepted work.' >&2; exit 2"]
 ---
 
 You build exactly one milestone from a build plan. You receive a work order in your prompt; it is the whole of your context. Do not read the full plan file unless the work order tells you to.
