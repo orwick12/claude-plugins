@@ -7,9 +7,10 @@ plugins/plan-and-verify/
 ├── .claude-plugin/plugin.json
 ├── skills/plan-and-verify/         SKILL.md, references/acceptance-checks.md, assets/plan-template.md
 ├── agents/                         builder-sonnet, builder-opus (no Agent tool), milestone-reviewer
+├── tests/                          script tests: bash tests/run.sh (needs bash, git, jq)
 └── hooks/
     ├── hooks.json                  SessionStart (exports PV_HOOKS, warns on stale locks),
-    │                               SubagentStop on builders (verify-milestone), PreToolUse (guard-builder)
+    │                               SubagentStop (verify-milestone), PreToolUse (guard-builder)
     ├── run-checks.sh               deterministic check runner; fingerprints code + checks
     ├── verify-milestone.sh         the SubagentStop hook; lock check; auto-snapshot; BLOCKED overwrites PASS
     ├── accept-milestone.sh         acceptance stamp: lock + fresh PASS + integrity, then the milestone commit
@@ -45,10 +46,10 @@ Commit `.claude/build-plans/` in your repo; plans, checks and results are part o
 | Layer | What it guarantees |
 |---|---|
 | Builder tools | `Read, Edit, Write, Grep, Glob, Bash` only; `disallowedTools: Agent, Task, NotebookEdit`. A builder cannot fork or delegate, so it is the only writer in the tree |
-| Bash guards | `git commit/push/stash/reset/checkout/rebase/merge` blocked for builders; edits to `checks.json` blocked |
-| Stop hook | re-runs the milestone's checks as a script; blocks the builder on failure (3 rounds max); honest `STATUS: BLOCKED` may stop; every attempt takes a snapshot |
+| Bash guards | `git commit/push/stash/reset/checkout/rebase/merge/switch/restore` and edits to `checks.json`, `hooks.lock`, `plan.md` denied for builders. Regexes over the command text: they stop mistakes, not a builder set on getting around them |
+| Stop hook | runs for every subagent and acts only on the plugin's builders; finds the report in the builder's hand-back; re-runs the milestone's checks as a script; blocks the builder on failure (3 rounds max); honest `STATUS: BLOCKED` may stop; never blocks twice for a missing report; every attempt takes a snapshot |
 | Results file | written by the runner, stamped with fingerprints of the tree and `checks.json` |
-| Acceptance script | refuses unless the result is PASS against exactly the tree and checks on disk now, and `checks.json` matches `HEAD`; then makes the one milestone commit |
+| Acceptance script | refuses unless the result is PASS against exactly the tree and checks on disk now, and `checks.json`/`hooks.lock` match `HEAD` and were changed only by `plan(<slug>): ...` commits; then makes the one milestone commit |
 | Reviewer | fresh context; diffs against the spawn snapshot; rejects on weakened tests, out-of-scope files, or `checks.json` in the diff |
 | Snapshots | whole-tree recovery points at spawn, per file batch, per finish attempt; never on the branch |
 
@@ -57,11 +58,11 @@ Commit `.claude/build-plans/` in your repo; plans, checks and results are part o
 - Weak checks pass trivially. The reference file exists to make you write good ones; nothing else can.
 - A builder can weaken a test inside the code. That is what review tier 1 is for.
 - The lock proves the scripts at acceptance time match what the plan was written against; it cannot stop a builder from editing the plugin cache mid-milestone, only catch it at the next hook or acceptance.
-- `guard-builder.sh` relies on Claude Code reporting `agent_type` on PreToolUse. If your version does not, the guards in the builder agents' own frontmatter still apply.
+- `guard-builder.sh` and `verify-milestone.sh` identify builders by the `agent_type` Claude Code reports (`plan-and-verify:builder-sonnet`, `plan-and-verify:builder-opus`). The `hooks:` in the builder agents' frontmatter did not fire in a real install and nothing relies on them.
 - Checks that need a live service need that service; give it a milestone 0.x.
 - Parallel groups are opt-in and rare; the hooks assume one working tree.
 - No wall-clock limit on a subagent; builders have `maxTurns: 60`, checks have timeouts. Size milestones accordingly.
 - Snapshots capture file state, not reasoning; Claude Code does not persist a stopped agent's transcript.
 - Snapshot refs accumulate per plan; prune with `git for-each-ref --format='%(refname)' refs/pv/snapshots/<slug>/ | xargs -n1 git update-ref -d` after the branch is merged.
-- Tested on Linux with `CLAUDE_PLUGIN_ROOT`, `CLAUDE_ENV_FILE` and hook inputs simulated, plus a simulated macOS toolset. Not tested through a real `claude plugin install` or on real Windows/macOS; check `/hooks` and the session-start message before your first plan.
+- Script tests (`tests/run.sh`) pass on macOS with bash 3.2 and 5. 1.1.0 was probed through a real plugin install on macOS, which found the wiring bugs fixed in 1.1.1; 1.1.1 itself has not yet been probed in a real install. Not tested on real Windows. Check `/hooks` and the session-start message before your first plan.
 - Remove any earlier copies of these agents from `~/.claude/agents` or `<project>/.claude/agents`; same-named agents shadow the plugin's.

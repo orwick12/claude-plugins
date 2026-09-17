@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # PreToolUse guard. Only acts when the tool call comes from a builder subagent
-# (agent_type builder-*); for the main agent and every other agent it is a no-op,
-# so the orchestrator can still commit, tag and branch. If Claude Code does not
-# report agent_type on this event, the frontmatter guards in the agent files
-# still apply.
+# (agent_type plan-and-verify:builder-sonnet|opus, see pv_is_builder); for the main
+# agent and every other agent it is a no-op, so the orchestrator can still commit,
+# tag and branch. The patterns below are regexes over the command text: they stop
+# honest mistakes, not a builder determined to get around them. Acceptance is the
+# real control.
 set -u
+HOOKS="$(cd "$(dirname "$0")" && pwd)"
+. "$HOOKS/lib.sh"
 input=$(cat)
 agent=$(jq -r '.agent_type // ""' <<<"$input")
-case "$agent" in builder-*) ;; *) exit 0 ;; esac
+pv_is_builder "$agent" || exit 0
 tool=$(jq -r '.tool_name // ""' <<<"$input")
 deny() { jq -n --arg r "$1" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'; exit 0; }
 case "$tool" in

@@ -9,26 +9,52 @@
 #                                   the main agent must read it (see SKILL.md)
 #   - report ends STATUS: BLOCKED -> allow stop (builder is honestly stuck)
 #   - no MILESTONE: line         -> block once, ask for the report format
+#   - not a builder              -> exit silently (the hook is registered without a
+#                                   matcher and runs for every subagent, internal ones too)
 #
-# Reads hook JSON on stdin; uses last_assistant_message (documented for
-# Stop/SubagentStop) rather than the transcript, which can lag.
+# Reads hook JSON on stdin. The report is taken from last_assistant_message when it
+# carries a MILESTONE line, else from the agent transcript: background builders hand
+# their report back with a SubagentHandback tool call before they stop, and the last
+# message is then only "report delivered".
 
 set -u
 HOOKS="$(cd "$(dirname "$0")" && pwd)"
 . "$HOOKS/lib.sh"
 input=$(cat)
+pv_is_builder "$(jq -r '.agent_type // ""' <<<"$input")" || exit 0
 [ -n "${CLAUDE_PROJECT_DIR:-}" ] || CLAUDE_PROJECT_DIR=$(jq -r '.cwd // "."' <<<"$input")
 ROOT=$(pv_root)
-msg=$(jq -r '.last_assistant_message // ""' <<<"$input")
+active=$(jq -r '.stop_hook_active // false' <<<"$input")
 MAX=${MILESTONE_MAX_ATTEMPTS:-3}
+REF_RE='^MILESTONE:[[:space:]]*[A-Za-z0-9._-]+/[A-Za-z0-9._:-]+'
 
 block() { jq -n --arg r "$1" '{decision:"block", reason:$r}'; exit 0; }
+# For problems a builder may be unable to fix: block the first time only. If this stop
+# already follows a block, let it stop with a note, so no agent is ever looped here.
+block_once() {
+  [ "$active" = "true" ] || block "$1"
+  jq -n --arg r "$1" '{systemMessage:("plan-and-verify: builder allowed to stop after a second unusable finish. " + $r)}'; exit 0
+}
 
-ref=$(grep -oE '^MILESTONE:[[:space:]]*[A-Za-z0-9._-]+/[A-Za-z0-9._:-]+' <<<"$msg" | head -1 | sed -E 's/^MILESTONE:[[:space:]]*//')
+msg=$(jq -r '.last_assistant_message // ""' <<<"$input")
+if ! grep -qE "$REF_RE" <<<"$msg"; then
+  tp=$(jq -r '.agent_transcript_path // ""' <<<"$input")
+  if [ -n "$tp" ] && [ -f "$tp" ]; then
+    msg=$(jq -R -r -n '[inputs | fromjson? | select(.type == "assistant") | .message.content[]?
+        | if .type == "tool_use" and .name == "SubagentHandback" then (.input.message // "")
+          elif .type == "text" then (.text // "") else empty end
+        | select(test("(^|\n)MILESTONE:[ \t]*[A-Za-z0-9._-]+/[A-Za-z0-9._:-]+"))] | last // ""' "$tp" 2>/dev/null)
+  fi
+fi
+
+ref=$(grep -oE "$REF_RE" <<<"$msg" | head -1 | sed -E 's/^MILESTONE:[[:space:]]*//')
 if [ -z "$ref" ]; then
-  block "Your final message must contain a line 'MILESTONE: <plan>/<id>' and follow the report format in your work order (Changed / Checks / Open questions / STATUS). If you cannot complete the milestone, end with 'STATUS: BLOCKED' and say why."
+  block_once "Your final message must contain a line 'MILESTONE: <plan>/<id>' and follow the report format in your work order (Changed / Checks / Open questions / STATUS). If you cannot complete the milestone, end with 'STATUS: BLOCKED' and say why."
 fi
 plan=${ref%%/*}; mid=${ref#*/}
+if [ ! -f "$ROOT/.claude/build-plans/$plan/checks.json" ]; then
+  block_once "Your report names plan '$plan', but this project has no .claude/build-plans/$plan/checks.json. Fix the MILESTONE line to the plan and id in your work order, or end with STATUS: BLOCKED explaining the problem."
+fi
 
 # Honest "I am stuck" lets the builder stop, but a BLOCKED result must
 # overwrite any earlier PASS so it can never authorise acceptance.
@@ -57,7 +83,7 @@ if [ "$code" -eq 0 ]; then
 fi
 
 if [ "$code" -eq 3 ]; then
-  block "Acceptance checks could not run (config problem, not a code problem):
+  block_once "Acceptance checks could not run (config problem, not a code problem):
 $out
 Either the MILESTONE line names the wrong plan/id, or checks.json has no checks for it. Fix that, or end with STATUS: BLOCKED explaining the problem."
 fi

@@ -5,9 +5,10 @@
 #   - results/<id>.json exists, status is PASS, and it was produced by
 #     run-checks.sh against the working tree as it is RIGHT NOW (tree_sha and
 #     checks_sha match), so a stale or earlier PASS cannot authorise this code
-#   - checks.json and hooks.lock are byte-identical to HEAD, and the installed
-#     scripts hash to what hooks.lock says (the plugin lives outside the repo,
-#     so the committed lock is how git vouches for it)
+#   - checks.json and hooks.lock are byte-identical to HEAD, every commit that
+#     changed them after they were added is a "plan(<plan>): ..." commit, and the
+#     installed scripts hash to what hooks.lock says (the plugin lives outside the
+#     repo, so the committed lock is how git vouches for it)
 # Then sets the milestone's status line in plan.md to DONE, commits the
 # working tree as one milestone commit tagged "[<plan> <ids>]" in the subject,
 # and prints one line. Find a milestone's commit with: git log --grep "\[<plan> <id>\]"
@@ -31,6 +32,16 @@ refuse() { echo "REFUSED: $*" >&2; exit 2; }
 LOCK="$DIR/hooks.lock"
 [ -f "$LOCK" ] || refuse "no hooks.lock for this plan; run: bash \"$HOOKS/lock-hooks.sh\" write $PLAN, commit it, then re-run the checks"
 [ -z "$(git diff HEAD --name-only -- "$CHECKS" "$LOCK")" ] || refuse "checks.json or hooks.lock differs from HEAD; restore (git checkout HEAD -- <path>) and re-run the checks"
+# "Equal to HEAD" alone lets a committed edit through, so only the planner's plan
+# commits may change these files after the commit that first added each of them.
+added=""
+for f in "$CHECKS" "$LOCK"; do added="$added $(git log --diff-filter=A --format=%H -- "$f" | tail -1)"; done
+foreign=$(git log --format='%H %h %s' -- "$CHECKS" "$LOCK" | while read -r full short subj; do
+  # (pattern) form: Bash 3.2 cannot parse "pattern)" inside $( ).
+  case " $added " in (*" $full "*) continue ;; esac
+  case "$subj" in ("plan($PLAN):"*) ;; (*) printf '%s "%s"; ' "$short" "$subj" ;; esac
+done)
+[ -z "$foreign" ] || refuse "checks.json or hooks.lock was changed by a commit that is not a plan($PLAN) commit: $foreign Only the planner changes them, in a commit titled \"plan($PLAN): ...\". Stop and show the user."
 bash "$HOOKS/lock-hooks.sh" verify "$PLAN" >/dev/null 2>&1 || refuse "installed plan-and-verify scripts do not match this plan's hooks.lock (plugin updated, or scripts tampered). If the update is intended: bash \"$HOOKS/lock-hooks.sh\" write $PLAN, commit, re-run the checks."
 
 # 2. freshness: current working-tree fingerprint must equal the one in each result

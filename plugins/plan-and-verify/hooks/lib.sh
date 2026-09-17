@@ -11,6 +11,16 @@ pv_root() {
   printf '%s' "${r%/}"
 }
 
+# True when an agent_type names one of this plugin's builders. Claude Code reports
+# plugin agents namespaced ("plan-and-verify:builder-sonnet") and some internal
+# agents with an empty agent_type, so match the suffix exactly and nothing else.
+pv_is_builder() {
+  case "${1:-}" in
+    builder-sonnet|builder-opus|*:builder-sonnet|*:builder-opus) return 0 ;;
+  esac
+  return 1
+}
+
 # SHA-256 of stdin, first 16 hex chars. Tries every common tool; never returns empty.
 pv_sha256() {
   local out=""
