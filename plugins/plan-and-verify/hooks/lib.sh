@@ -60,14 +60,35 @@ pv_sha256() {
   printf '%s' "$out"
 }
 
-# Run "$@" with a time limit of $PV_TIMEOUT seconds. Uses timeout/gtimeout when
-# present, else a perl alarm, else runs unlimited (run-checks.sh warns once).
+# Run "$@" with a time limit of $PV_TIMEOUT seconds, and take its children with it.
+# A check that starts a server or a build leaves grandchildren behind; killing only the
+# direct child leaves them running (and holding the runner's output). timeout/gtimeout
+# already signal the whole group and get -k so a process ignoring TERM is still killed;
+# the perl fallback (stock macOS has no timeout) forks, puts the child in its own process
+# group, and signals that group. Without any of the three, the check runs unlimited and
+# run-checks.sh warns once.
 pv_timeout() {
   local t="$PV_TIMEOUT"
-  if command -v timeout >/dev/null 2>&1; then timeout "$t" "$@"
-  elif command -v gtimeout >/dev/null 2>&1; then gtimeout "$t" "$@"
+  if command -v timeout >/dev/null 2>&1; then timeout -k 10 "$t" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then gtimeout -k 10 "$t" "$@"
   elif command -v perl >/dev/null 2>&1; then
-    perl -e 'alarm shift; exec @ARGV' "$t" "$@"; local c=$?; [ $c -eq 142 ] && c=124; return $c
+    perl -e '
+      my $t = shift;
+      my $pid = fork();
+      die "fork failed: $!\n" unless defined $pid;
+      if ($pid == 0) { setpgrp(0, 0); exec @ARGV; exit 127; }
+      my $rc = 124;
+      eval {
+        local $SIG{ALRM} = sub { die "pv-timeout\n" };
+        alarm $t; waitpid($pid, 0); alarm 0;
+        $rc = ($? & 127) ? 128 + ($? & 127) : ($? >> 8);
+        1;
+      } or do {
+        kill("TERM", -$pid); sleep 1; kill("KILL", -$pid);
+        waitpid($pid, 0); $rc = 124;
+      };
+      exit $rc;
+    ' "$t" "$@"
   else "$@"
   fi
 }
