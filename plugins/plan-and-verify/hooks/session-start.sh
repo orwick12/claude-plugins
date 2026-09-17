@@ -14,6 +14,10 @@ if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
 fi
 
 warn=""
+repo_note=""
+if ! rs=$(bash "$HOOKS/ensure-repo.sh" --check 2>&1); then
+  repo_note=" NOTE: $(printf '%s' "$rs" | head -n1). Before planning or executing, run bash \"\$PV_HOOKS/ensure-repo.sh\" (tell the user what it did)."
+fi
 for lock in "$ROOT"/.claude/build-plans/*/hooks.lock; do
   [ -f "$lock" ] || continue
   if ! bash "$HOOKS/lock-hooks.sh" verify "$(basename "$(dirname "$lock")")" >/dev/null 2>&1; then
@@ -22,5 +26,6 @@ for lock in "$ROOT"/.claude/build-plans/*/hooks.lock; do
 done
 
 ctx="plan-and-verify v$ver is installed. Its scripts are in PV_HOOKS=$HOOKS (exported for Bash). Run them as: bash \"\$PV_HOOKS/run-checks.sh\" <plan> <id>, bash \"\$PV_HOOKS/accept-milestone.sh\" <plan> <id>, bash \"\$PV_HOOKS/snapshot.sh\" .... Plans live in .claude/build-plans/<slug>/."
+ctx="$ctx$repo_note"
 [ -n "$warn" ] && ctx="$ctx WARNING: plans locked against different hook versions:$warn. Run bash \"\$PV_HOOKS/lock-hooks.sh\" write <slug> (and commit) before executing them."
 jq -n --arg c "$ctx" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}'

@@ -16,8 +16,13 @@ plugins/plan-and-verify/
     ├── snapshot.sh                 recovery points under refs/pv/snapshots
     ├── guard-builder.sh            denies git commit/push/... and checks.json edits, builders only
     ├── lock-hooks.sh               writes/verifies <plan>/hooks.lock
+    ├── ensure-repo.sh              creates a git repo + initial commit when a project has none
     └── lib.sh                      portability (sha256, timeout, Windows paths)
 ```
+
+## Projects without git
+
+The skill runs `ensure-repo.sh` before planning or executing. If the folder is not a repo it runs `git init` on branch `main`, adds a starter `.gitignore` (dependencies, build output, `.env`, editor files) only if none exists, and makes an initial commit. It refuses to run in your home directory or a drive root, will not commit files over 5 MB, never sets your git name/email for you, and warns instead of nesting when the folder is already inside a bigger repo. The session-start message also notes when a project has no repo yet.
 
 ## Scripts outside the repo, verified by the repo
 

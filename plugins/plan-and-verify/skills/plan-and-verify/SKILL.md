@@ -13,6 +13,15 @@ Two modes, decided by the request:
 
 Never combine planning and building in one turn. A plan the user has not seen is a guess.
 
+## Step 0, both modes: make sure there is a git repo
+
+Run `bash "$PV_HOOKS/ensure-repo.sh"` before anything else. Everything below (hooks.lock, snapshots, milestone commits) needs a repository with at least one commit.
+- `git repo ready`: continue.
+- `INITIALISED: ...`: it created the repo (branch `main`, starter `.gitignore` if there was none, initial commit). Tell the user in one line what it did, then continue.
+- `NOTE: ... inside the git repo at ...`: the project is a subfolder of a bigger repo. Tell the user and ask whether that is intended before continuing.
+- `REFUSED` (home directory or drive root) or `NEEDS USER` (no git identity, or files over 5 MB): stop, show the user the message and the commands it suggests, and wait. Do not set git user.name/email yourself and do not commit large files.
+
+
 ## Mode: Plan
 
 ### 1. Understand before you write

@@ -16,7 +16,7 @@ LOCK="$ROOT/.claude/build-plans/$plan/hooks.lock"
 ver=$(jq -r .version "$HOOKS/../.claude-plugin/plugin.json" 2>/dev/null || echo unknown)
 current() {
   echo "plugin plan-and-verify $ver"
-  for f in lib run-checks verify-milestone accept-milestone snapshot guard-builder lock-hooks; do
+  for f in lib run-checks verify-milestone accept-milestone snapshot guard-builder lock-hooks ensure-repo; do
     printf '%s  %s.sh\n' "$(pv_sha256 < "$HOOKS/$f.sh")" "$f"
   done
 }

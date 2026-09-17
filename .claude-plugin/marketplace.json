@@ -1,13 +1,17 @@
 {
-  "name": "orwick12",
-  "owner": { "name": "Brian Orwick" },
-  "metadata": { "description": "Personal Claude Code plugins" },
+  "name": "YOUR-GITHUB-USERNAME",
+  "owner": {
+    "name": "YOUR NAME"
+  },
+  "metadata": {
+    "description": "Personal Claude Code plugins"
+  },
   "plugins": [
     {
       "name": "plan-and-verify",
       "source": "./plugins/plan-and-verify",
       "description": "Phased build plans with per-milestone model routing, hook-enforced acceptance checks, git recovery points and one-writer execution.",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "category": "workflow"
     }
   ]
