@@ -3,7 +3,7 @@
   "version": "1.1.0",
   "description": "Phased build plans with per-milestone model routing, hook-enforced acceptance checks, git recovery points and one-writer execution.",
   "author": {
-    "name": "YOUR NAME"
+    "name": "Brian Orwick"
   },
   "keywords": [
     "planning",
