@@ -1,6 +1,6 @@
 {
   "name": "plan-and-verify",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Phased build plans with per-milestone model routing, hook-enforced acceptance checks, git recovery points and one-writer execution.",
   "author": {
     "name": "Brian Orwick"

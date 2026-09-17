@@ -140,7 +140,14 @@ case "$cmd" in
     [ -f "$C" ] || { echo "no checks.json for $plan" >&2; exit 3; }
     bad=0
     while IFS=$'\t' read -r where name cmd; do
-      case "$cmd" in
+      # A check that makes its own temp directory may clean it up: that is the clean-clone
+      # pattern the reference recommends, and refusing it would push people to write
+      # weaker checks. Only the cleanup of a variable holding mktemp's output is exempt.
+      scan=$cmd
+      case "$scan" in
+        *"mktemp -d"*) scan=$(printf '%s' "$scan" | sed -E 's/rm[[:space:]]+-[rf][rf][[:space:]]+"?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?"?//g') ;;
+      esac
+      case "$scan" in
         *"rm -rf"*|*"rm -fr"*|*"git clean"*|*"git reset --hard"*|*"git push"*|*"DROP TABLE"*|*"DROP DATABASE"*|\
         *"TRUNCATE"*|*dropdb*|*"kubectl delete"*|*"terraform apply"*|*"terraform destroy"*|*"aws s3 rm"*|*"| sh"*|*"| bash"*|*"> .env"*)
           printf 'DESTRUCTIVE  %s %s: %s\n' "$where" "$name" "$cmd"; bad=1 ;;

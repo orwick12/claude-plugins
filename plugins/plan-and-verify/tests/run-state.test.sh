@@ -94,6 +94,16 @@ jq '.milestones["1.1"].checks += [{"name":"reset","cmd":"git reset --hard HEAD~1
 out=$(rs lint-checks demo; echo "exit=$?")
 assert_contains "a destructive check is named" "reset" "$out"
 assert_contains "a destructive check fails the lint" "exit=2" "$out"
+
+# The clean-clone check in references/acceptance-checks.md cleans its own temp dir up.
+# Refusing that pattern would push people to write weaker checks, so it must lint clean.
+jq '.gates["1"] = {"checks":[{"name":"clean clone","cmd":"t=$(mktemp -d) && trap '"'"'rm -rf \"$t\"'"'"' EXIT && git clone -q . \"$t/c\" && cat \"$t/c/hello.txt\"","expect":"equals","value":"ok"}]}' "$C.bak" > "$C"
+out=$(rs lint-checks demo; echo "exit=$?")
+assert_contains "a clean-clone check with its own cleanup lints clean" "exit=0" "$out"
+
+jq '.gates["1"] = {"checks":[{"name":"wipe","cmd":"rm -rf build && make","expect":"exit0"}]}' "$C.bak" > "$C"
+out=$(rs lint-checks demo; echo "exit=$?")
+assert_contains "a bare rm -rf is still refused" "exit=2" "$out"
 mv "$C.bak" "$C"
 
 # --- preflight: the mode the plan asks for versus the mode the session is in -----------
