@@ -59,4 +59,61 @@ assert_contains "the acceptance heartbeat says accepted"  'accepted'            
 assert_empty    "the run directory stayed out of the commit" \
   "$(git -C "$REPO" show --name-only --format= HEAD | grep '/run/' | tr '\n' ' ')"
 
+# --- post: what the orchestrator is told when a builder returns -----------------------
+# The hand-back text is the builder's own account. This line is the truth: the results
+# file, and whether the finish hook ran at all.
+post() {
+  jq -n --arg t "$1" --arg p "$2" --arg cwd "$REPO" \
+    '{hook_event_name:"PostToolUse",tool_name:"Agent",cwd:$cwd,
+      tool_input:{subagent_type:$t,description:"pv demo 1.1 builder",prompt:$p},
+      tool_response:{}}' |
+    (cd "$REPO" && CLAUDE_PROJECT_DIR="$REPO" bash "$HOOKS/run-state.sh" post 2>/dev/null)
+}
+P=$'work order\n\nPlan: demo  Milestone: 1.1\nPV_HOOKS: /x'
+ctx=$(post plan-and-verify:builder-sonnet "$P" | jq -r '.hookSpecificOutput.additionalContext // ""')
+assert_contains "post names the milestone"        "demo/1.1"   "$ctx"
+assert_contains "post reports the results status" "results=PASS" "$ctx"
+assert_contains "post reports the heartbeat"      "heartbeat=yes" "$ctx"
+
+: > "$RUN/hook-events.jsonl"
+ctx=$(post plan-and-verify:builder-sonnet "$P" | jq -r '.hookSpecificOutput.additionalContext // ""')
+assert_contains "no heartbeat is reported as such" "heartbeat=no" "$ctx"
+assert_empty "post says nothing about a reviewer" "$(post plan-and-verify:milestone-reviewer "$P")"
+
+# --- lint-checks: an unattended run must not execute a destructive check ---------------
+C="$REPO/.claude/build-plans/demo/checks.json"
+out=$(rs lint-checks demo)
+assert_contains "a clean checks.json lints clean" "ok" "$out"
+cp "$C" "$C.bak"
+jq '.milestones["1.1"].checks += [{"name":"reset","cmd":"git reset --hard HEAD~1","expect":"exit0"}]' "$C.bak" > "$C"
+out=$(rs lint-checks demo; echo "exit=$?")
+assert_contains "a destructive check is named" "reset" "$out"
+assert_contains "a destructive check fails the lint" "exit=2" "$out"
+mv "$C.bak" "$C"
+
+# --- preflight: the mode the plan asks for versus the mode the session is in -----------
+plan_mode() { python3 - "$1" <<'PY'
+import re,sys
+p="'"$REPO"'/.claude/build-plans/demo/plan.md"
+s=open(p).read()
+s = re.sub(r'(?m)^mode:.*$', '', s)
+s = s.replace('# Plan: demo', '# Plan: demo\nmode: ' + sys.argv[1])
+open(p,'w').write(s)
+PY
+}
+session_mode() { jq -n --arg m "$1" '{ts:"now",session_id:"s",permission_mode:$m,cwd:"x"}' > "$RUN/session.json"; }
+
+plan_mode autonomous; session_mode auto
+assert_contains "autonomous plan in auto mode: good to go" "AUTONOMOUS OK" "$(rs preflight demo)"
+session_mode acceptEdits
+assert_contains "autonomous plan in acceptEdits: degraded" "DEGRADED" "$(rs preflight demo)"
+session_mode default
+out=$(rs preflight demo)
+assert_contains "autonomous plan in Manual mode: mismatch" "MODE MISMATCH" "$out"
+assert_contains "the mismatch names the way out" "permission-mode" "$out"
+session_mode plan
+assert_contains "plan mode refuses to build" "REFUSED" "$(rs preflight demo)"
+plan_mode supervised; session_mode default
+assert_contains "a supervised plan is supervised" "SUPERVISED" "$(rs preflight demo)"
+
 finish
