@@ -19,13 +19,15 @@ mk_transcript() {
   jq -nc --arg f "$3" '{type:"assistant",message:{role:"assistant",content:[{type:"text",text:$f}]}}' >> "$1"
 }
 
-# stop <agent_type> <last_assistant_message|-> <transcript path> <stop_hook_active>   ("-" = key absent)
-stop() {
-  jq -n --arg a "$1" --arg m "$2" --arg tp "$3" --argjson act "$4" --arg cwd "$REPO" \
-    '{hook_event_name:"SubagentStop",agent_type:$a,agent_id:"atest",cwd:$cwd,stop_hook_active:$act,
+# stop_as <agent_id> <agent_type> <last_assistant_message|-> <transcript path> <stop_hook_active>
+stop_as() {
+  jq -n --arg id "$1" --arg a "$2" --arg m "$3" --arg tp "$4" --argjson act "$5" --arg cwd "$REPO" \
+    '{hook_event_name:"SubagentStop",agent_type:$a,agent_id:$id,cwd:$cwd,stop_hook_active:$act,
       last_assistant_message:$m,agent_transcript_path:$tp} | if $m == "-" then del(.last_assistant_message) else . end' |
     CLAUDE_PROJECT_DIR="$REPO" bash "$HOOKS/verify-milestone.sh" 2>/dev/null
 }
+# stop <agent_type> <last_assistant_message|-> <transcript path> <stop_hook_active>   ("-" = key absent)
+stop() { stop_as atest "$1" "$2" "$3" "$4"; }
 field() { [ -z "$1" ] && echo "" || jq -r "$2 // \"\"" <<<"$1" 2>/dev/null; }
 plans() { ls "$REPO/.claude/build-plans" | tr '\n' ' '; }
 
@@ -81,5 +83,39 @@ out=$(stop "$B" $'MILESTONE: demo/1.1\nChanged: none\nOpen questions: check is w
 assert_empty "BLOCKED report for a real plan: builder may stop" "$out"
 assert_eq    "BLOCKED report for a real plan: results file says BLOCKED" BLOCKED \
   "$(jq -r .status "$REPO/.claude/build-plans/demo/results/1.1.json" 2>/dev/null)"
+
+# --- F13: the attempts budget belongs to the agent, not to the milestone -------------
+ATTEMPTS="$REPO/.claude/build-plans/demo/results/1.1.attempts"
+printf 'wrong' > "$REPO/hello.txt"; rm -f "$ATTEMPTS"
+out=$(stop_as one "$B" "$AFTER_HANDBACK" "$T/handback.jsonl" false)
+assert_contains "F13 builder one, first failed finish"  "attempt 1 of 3" "$(field "$out" .reason)"
+out=$(stop_as one "$B" "$AFTER_HANDBACK" "$T/handback.jsonl" true)
+assert_contains "F13 builder one, second failed finish" "attempt 2 of 3" "$(field "$out" .reason)"
+out=$(stop_as one "$B" "$AFTER_HANDBACK" "$T/handback.jsonl" true)
+assert_not_contains "F13 builder one exhausts its budget: allowed to stop" '"block"' "$out"
+assert_contains     "F13 exhausted budget says so" "after 3 attempts" "$(field "$out" .systemMessage)"
+
+out=$(stop_as two "$B" "$AFTER_HANDBACK" "$T/handback.jsonl" false)
+assert_eq       "F13 a different builder is blocked, not waved through" block "$(field "$out" .decision)"
+assert_contains "F13 a different builder gets a fresh budget" "attempt 1 of 3" "$(field "$out" .reason)"
+out=$(stop_as two "$B" "$AFTER_HANDBACK" "$T/handback.jsonl" true)
+assert_contains "F13 the same builder keeps counting" "attempt 2 of 3" "$(field "$out" .reason)"
+
+# --- F36: the verified report is left on disk, and the block does not ask for a second hand-back
+REPORT="$REPO/.claude/build-plans/demo/results/1.1.report.md"
+assert_contains "F36 block tells the builder not to hand back twice" "SubagentHandback" "$(field "$out" .reason)"
+assert_not_contains "F36 block no longer says to finish with the report format again" \
+  "finish with the report format again" "$(field "$out" .reason)"
+assert_contains "F36 report file written on a failed finish" "MILESTONE: demo/1.1" "$(cat "$REPORT" 2>/dev/null)"
+
+rm -f "$REPORT"; printf 'ok' > "$REPO/hello.txt"
+out=$(stop_as three "$B" "$AFTER_HANDBACK" "$T/handback.jsonl" false)
+assert_empty    "F36 passing finish still lets the builder stop" "$out"
+assert_contains "F36 report file written on a passing finish" "STATUS: DONE" "$(cat "$REPORT" 2>/dev/null)"
+assert_contains "F36 report file records where the report came from" "handback" "$(cat "$REPORT" 2>/dev/null)"
+
+rm -f "$REPORT"
+out=$(stop_as four "$B" "$REPORT_DONE" "$T/empty.jsonl" false)
+assert_contains "F36 report from the last message is captured too" "MILESTONE: demo/1.1" "$(cat "$REPORT" 2>/dev/null)"
 
 finish
