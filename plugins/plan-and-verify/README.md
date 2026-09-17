@@ -1,0 +1,62 @@
+# plan-and-verify
+
+A planning skill for Claude Code that produces phases and milestones with per-milestone model routing, runnable acceptance checks, a hook that will not let a builder finish until those checks pass, git recovery points, and one-writer-per-tree execution. Delivered as a plugin; see the marketplace README for install.
+
+```
+plugins/plan-and-verify/
+├── .claude-plugin/plugin.json
+├── skills/plan-and-verify/         SKILL.md, references/acceptance-checks.md, assets/plan-template.md
+├── agents/                         builder-sonnet, builder-opus (no Agent tool), milestone-reviewer
+└── hooks/
+    ├── hooks.json                  SessionStart (exports PV_HOOKS, warns on stale locks),
+    │                               SubagentStop on builders (verify-milestone), PreToolUse (guard-builder)
+    ├── run-checks.sh               deterministic check runner; fingerprints code + checks
+    ├── verify-milestone.sh         the SubagentStop hook; lock check; auto-snapshot; BLOCKED overwrites PASS
+    ├── accept-milestone.sh         acceptance stamp: lock + fresh PASS + integrity, then the milestone commit
+    ├── snapshot.sh                 recovery points under refs/pv/snapshots
+    ├── guard-builder.sh            denies git commit/push/... and checks.json edits, builders only
+    ├── lock-hooks.sh               writes/verifies <plan>/hooks.lock
+    └── lib.sh                      portability (sha256, timeout, Windows paths)
+```
+
+## Scripts outside the repo, verified by the repo
+
+The plugin lives in Claude Code's plugin cache, not in your project. So each plan carries `hooks.lock`: the plugin version and a SHA-256 of every enforcement script, written by `lock-hooks.sh` when the plan is created and committed with it. `verify-milestone.sh` and `accept-milestone.sh` both refuse to certify anything unless the installed scripts hash to what the lock says and the lock itself is unchanged from `HEAD`. Tampering with a script therefore requires editing a committed file, which shows up in the reviewer's diff and gets rejected. Updating the plugin deliberately means re-locking each in-flight plan and committing.
+
+`$PV_HOOKS` is exported into the session's shell by the SessionStart hook (through Claude Code's `CLAUDE_ENV_FILE`) and also stated in context, so the skill and agents call scripts as `bash "$PV_HOOKS/<script>"` on every OS.
+
+## Use
+
+- Plan: `/plan-and-verify <what you want built>` (or just describe it; the skill triggers on plan/phases/milestones language). Claude writes `.claude/build-plans/<slug>/plan.md` and `checks.json` in the project, shows a summary, and stops.
+- Review the plan. Spend your attention on the checks; a milestone with weak checks is one the hook cannot protect.
+- Execute: `/plan-and-verify execute <slug>`. Claude creates `plan/<slug>`, runs milestones one at a time, snapshots before each, reads `results/<id>.json` as the truth, reviews tier 1/2, pauses on tier 2, commits accepted work via `accept-milestone.sh`, tags each passed phase, and never pushes.
+- Resume after a lost session: same command; `git log --grep '[<slug> '` is the source of truth.
+- Undo: `bash "$PV_HOOKS/snapshot.sh" list <slug> <id>` then `restore <ref>`; restore refuses without `PV_CONFIRM_RESTORE=yes`.
+
+Commit `.claude/build-plans/` in your repo; plans, checks and results are part of the project's history.
+
+## How enforcement works
+
+| Layer | What it guarantees |
+|---|---|
+| Builder tools | `Read, Edit, Write, Grep, Glob, Bash` only; `disallowedTools: Agent, Task, NotebookEdit`. A builder cannot fork or delegate, so it is the only writer in the tree |
+| Bash guards | `git commit/push/stash/reset/checkout/rebase/merge` blocked for builders; edits to `checks.json` blocked |
+| Stop hook | re-runs the milestone's checks as a script; blocks the builder on failure (3 rounds max); honest `STATUS: BLOCKED` may stop; every attempt takes a snapshot |
+| Results file | written by the runner, stamped with fingerprints of the tree and `checks.json` |
+| Acceptance script | refuses unless the result is PASS against exactly the tree and checks on disk now, and `checks.json` matches `HEAD`; then makes the one milestone commit |
+| Reviewer | fresh context; diffs against the spawn snapshot; rejects on weakened tests, out-of-scope files, or `checks.json` in the diff |
+| Snapshots | whole-tree recovery points at spawn, per file batch, per finish attempt; never on the branch |
+
+## Where it still falls down
+
+- Weak checks pass trivially. The reference file exists to make you write good ones; nothing else can.
+- A builder can weaken a test inside the code. That is what review tier 1 is for.
+- The lock proves the scripts at acceptance time match what the plan was written against; it cannot stop a builder from editing the plugin cache mid-milestone, only catch it at the next hook or acceptance.
+- `guard-builder.sh` relies on Claude Code reporting `agent_type` on PreToolUse. If your version does not, the guards in the builder agents' own frontmatter still apply.
+- Checks that need a live service need that service; give it a milestone 0.x.
+- Parallel groups are opt-in and rare; the hooks assume one working tree.
+- No wall-clock limit on a subagent; builders have `maxTurns: 60`, checks have timeouts. Size milestones accordingly.
+- Snapshots capture file state, not reasoning; Claude Code does not persist a stopped agent's transcript.
+- Snapshot refs accumulate per plan; prune with `git for-each-ref --format='%(refname)' refs/pv/snapshots/<slug>/ | xargs -n1 git update-ref -d` after the branch is merged.
+- Tested on Linux with `CLAUDE_PLUGIN_ROOT`, `CLAUDE_ENV_FILE` and hook inputs simulated, plus a simulated macOS toolset. Not tested through a real `claude plugin install` or on real Windows/macOS; check `/hooks` and the session-start message before your first plan.
+- Remove any earlier copies of these agents from `~/.claude/agents` or `<project>/.claude/agents`; same-named agents shadow the plugin's.
