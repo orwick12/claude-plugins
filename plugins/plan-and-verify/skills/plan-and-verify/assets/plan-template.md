@@ -3,12 +3,19 @@
 Request: <one paragraph, the user's words where possible>
 Branch: plan/<slug>   Base: <ref>   (execution creates the branch; one commit per accepted milestone, one tag per passed phase; never pushed by Claude)
 Main model: <fixed for the whole run; never change it mid-run>
+mode: supervised | autonomous   (autonomous runs milestone to milestone on its own and stops only for the five
+                                 conditions in references/autonomous-run.md; changing it is a plan(<slug>) commit)
+autonomy: builder-runs-per-milestone=3  check-fixes-per-run=2  repairs-per-gate=2
 
 ## Project commands
 test: <cmd>   build: <cmd>   typecheck: <cmd>   lint: <cmd>   dev server: <cmd>
 
 ## Decisions already made
 - <decisions the planner took so builders do not re-decide them>
+
+## Environment
+- <every env var a check or command needs, and where it comes from. An autonomous run refuses to start
+  when one is missing rather than letting a builder invent a value.>
 
 ## Phase 1: <name>
 Working state at end: <what is true and demonstrable when this phase ends>
@@ -23,6 +30,8 @@ parallel-group: none   (opt-in only; see SKILL.md field rules)
 model: sonnet | opus
 needs-planning: no | yes — <what the planning step must produce>
 review: 0 | 1 | 2
+irreversible: no | yes   (yes = deletes data, migrates a schema, rotates a secret, touches payments, or
+                          changes anything outside this repo. The only thing that still pauses an autonomous run at tier 2.)
 checks: <check names from checks.json>
 status: TODO | DONE | ABANDONED <why>   (DONE is written by accept-milestone.sh; the commit is `git log --grep '[<slug> <id>]'`)
 context: |
@@ -48,6 +57,7 @@ parallel-group: none
 model: sonnet
 needs-planning: no
 review: 1
+irreversible: no
 checks: auth middleware tests, typecheck, expired token 401, valid token 200
 status: TODO
 context: |

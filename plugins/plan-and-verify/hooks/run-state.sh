@@ -49,6 +49,54 @@ case "$cmd" in
     done
     exit 0 ;;
 
+  milestone)
+    # One work order, so a fresh-context orchestrator never reads the whole plan.
+    plan="${2:-}"; id="${3:-}"
+    [ -n "$plan" ] && [ -n "$id" ] || { echo "usage: run-state.sh milestone <plan> <id>" >&2; exit 3; }
+    ROOT=$(pv_root); P="$ROOT/.claude/build-plans/$plan/plan.md"
+    [ -f "$P" ] || { echo "no plan.md for $plan" >&2; exit 3; }
+    awk -v id="$id" '
+      $0 == "### Milestone " id {f=1; print; next}
+      f && /^### Milestone / {exit}
+      f {print}' "$P" ;;
+
+  brief)
+    # Where this plan stands, rebuilt from the repository: git for what is accepted,
+    # plan.md for what was intended, the run log for what was decided. Anything that
+    # cannot be rebuilt this way cannot be trusted after a context reset.
+    plan="${2:-}"; [ -n "$plan" ] || { echo "usage: run-state.sh brief <plan>" >&2; exit 3; }
+    ROOT=$(pv_root); dir="$ROOT/.claude/build-plans/$plan"; P="$dir/plan.md"
+    [ -f "$P" ] || { echo "no plan.md for $plan" >&2; exit 3; }
+    want=$(grep -oE '^mode:[[:space:]]*[a-z]+' "$P" | head -1 | awk '{print $2}'); [ -n "$want" ] || want=supervised
+    have=unknown
+    [ -f "$dir/run/session.json" ] && have=$(jq -r '.permission_mode // "unknown"' "$dir/run/session.json" 2>/dev/null)
+    branch=$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo none)
+    echo "plan $plan  mode: $want  session: $have  branch: $branch"
+    tag=$(git -C "$ROOT" tag --list "plan/$plan/phase-*" 2>/dev/null | sort | tail -1)
+    [ -n "$tag" ] && echo "phases passed: $tag"
+    next=""
+    for id in $(grep -oE '^### Milestone [A-Za-z0-9._:-]+' "$P" | awk '{print $3}'); do
+      c=$(git -C "$ROOT" log --oneline --grep "\[$plan $id\]" 2>/dev/null | head -1)
+      if [ -n "$c" ]; then printf '  %-6s accepted  %s\n' "$id" "$c"
+      else printf '  %-6s pending\n' "$id"; [ -n "$next" ] || next=$id
+      fi
+    done
+    [ -n "$next" ] && echo "next: $next" || echo "next: none (every milestone has a commit)"
+    m="$dir/run/open-builder.json"
+    [ -f "$m" ] && echo "open builder: $(jq -r '.id + " (" + .agent_type + ")"' "$m" 2>/dev/null)"
+    d="$dir/run/decisions.jsonl"
+    if [ -f "$d" ]; then
+      echo "last decisions:"
+      tail -20 "$d" | jq -r '"  " + .ts + "  " + (.event // "?") + " " + (.id // "-") +
+                             (if .class then " [class " + .class + "]" else "" end) +
+                             "  " + (.decision // .trigger // "")' 2>/dev/null
+    fi
+    e="$dir/run/hook-events.jsonl"
+    if [ -f "$e" ]; then
+      echo "last enforcement events:"
+      tail -10 "$e" | jq -r '"  " + .ts + "  " + (.actor // "?") + " " + (.id // "-") + " " + (.outcome // "")' 2>/dev/null
+    fi ;;
+
   clear-open)
     plan="${2:-}"; [ -n "$plan" ] || { echo "usage: run-state.sh clear-open <plan>" >&2; exit 3; }
     ROOT=$(pv_root); d=$(pv_run_dir "$ROOT" "$plan") || exit 3
