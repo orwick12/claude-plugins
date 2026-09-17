@@ -36,6 +36,15 @@ jq -n --arg cwd "$REPO" '{hook_event_name:"PreToolUse",session_id:"s1",permissio
 assert_contains "record stores the permission mode" '"permission_mode":"auto"' "$(cat "$RUN/session.json" 2>/dev/null)"
 assert_empty "recording leaves the working tree clean" "$(porcelain)"
 
+# The first tool call of a session happens before anything has made a run directory, so a
+# recorder that only writes into existing ones leaves preflight with no mode to read, and
+# an autonomous plan is told it is in the wrong mode for the whole first milestone.
+rm -rf "$RUN"
+jq -n --arg cwd "$REPO" '{hook_event_name:"PreToolUse",session_id:"s2",permission_mode:"auto",cwd:$cwd,tool_name:"Bash",tool_input:{command:"ls"}}' |
+  (cd "$REPO" && CLAUDE_PROJECT_DIR="$REPO" bash "$HOOKS/run-state.sh" record >/dev/null 2>&1)
+assert_contains "record works before any run directory exists" '"permission_mode":"auto"' "$(cat "$RUN/session.json" 2>/dev/null)"
+assert_empty "and still leaves the working tree clean" "$(porcelain)"
+
 # --- heartbeat: the enforcement hooks say what they did ------------------------------
 : > "$RUN/hook-events.jsonl"
 printf 'wrong' > "$REPO/hello.txt"

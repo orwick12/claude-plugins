@@ -41,8 +41,13 @@ case "$cmd" in
     ROOT=$(pv_root)
     mode=$(jq -r '.permission_mode // ""' <<<"$input")
     [ -n "$mode" ] || exit 0                      # not every event carries it
-    for d in "$ROOT"/.claude/build-plans/*/run; do
-      [ -d "$d" ] || continue
+    # Every plan, not only those that already have a run directory: the first tool call of
+    # a session comes before anything has made one, and a preflight with no session record
+    # would report a mode mismatch to a session that is in exactly the right mode.
+    for p in "$ROOT"/.claude/build-plans/*/plan.md; do
+      [ -f "$p" ] || continue
+      slug=$(basename "$(dirname "$p")")
+      d=$(pv_run_dir "$ROOT" "$slug") || continue
       jq -nc --arg m "$mode" --arg s "$(jq -r '.session_id // ""' <<<"$input")" \
             --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg cwd "$ROOT" \
         '{ts:$ts,session_id:$s,permission_mode:$m,cwd:$cwd}' > "$d/session.json" 2>/dev/null || true
