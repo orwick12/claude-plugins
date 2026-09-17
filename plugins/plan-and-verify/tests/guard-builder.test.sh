@@ -36,6 +36,7 @@ assert_eq "F17 git -C <dir> commit denied"            deny  "$(g 'git -C . commi
 assert_eq "F17 git -c k=v commit denied"              deny  "$(g 'git -c user.name=x commit -m x')"
 assert_eq "F17 GIT_DIR=... git commit denied"         deny  "$(g 'GIT_DIR=.git git commit -m x')"
 assert_eq "F17 env VAR=1 git push denied"             deny  "$(g 'env GIT_PAGER=cat git push')"
+assert_eq "F17 single-letter VAR=1 git push denied"   deny  "$(g 'A=1 git push')"
 assert_eq "F17 leading whitespace git push denied"    deny  "$(g '  git   push')"
 assert_eq "F17 --no-pager before subcommand denied"   deny  "$(g 'git --no-pager stash list')"
 assert_eq "F17 chained after && still denied"         deny  "$(g 'cd sub && git commit -m x')"

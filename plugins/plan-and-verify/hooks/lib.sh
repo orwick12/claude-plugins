@@ -21,6 +21,33 @@ pv_is_builder() {
   return 1
 }
 
+# Print the git subcommand of every git invocation in a command string, one per line.
+# A regex over the raw text misses the spellings that still reach git: leading
+# whitespace, "VAR=val git ...", "env VAR=val git ...", and git's own global options
+# ("git -C dir commit", "git -c k=v commit", "git --no-pager stash"). Splitting on the
+# shell's command separators and walking the tokens catches all of them, and keeps
+# lookalikes such as git-crypt out.
+pv_git_subcommands() {
+  printf '%s\n' "${1:-}" | tr '\n' ';' | sed 's/&&/;/g; s/||/;/g; s/|/;/g' | tr ';' '\n' | while IFS= read -r seg; do
+    set -- $seg                                    # deliberate word splitting
+    while [ $# -gt 0 ]; do                         # env assignments and env(1)
+      case "$1" in
+        [A-Za-z_]*=*|env) shift ;;              # VAR=val (a bracket matches one char, so no second class here)
+        *) break ;;
+      esac
+    done
+    [ $# -gt 0 ] || continue
+    case "$1" in git|*/git) shift ;; *) continue ;; esac
+    while [ $# -gt 0 ]; do                         # git's global options
+      case "$1" in
+        -C|-c|--git-dir|--work-tree|--namespace|--exec-path) shift; [ $# -gt 0 ] && shift ;;
+        -*) shift ;;
+        *) printf '%s\n' "$1"; break ;;
+      esac
+    done
+  done
+}
+
 # SHA-256 of stdin, first 16 hex chars. Tries every common tool; never returns empty.
 pv_sha256() {
   local out=""
