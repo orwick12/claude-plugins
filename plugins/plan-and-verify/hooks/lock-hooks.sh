@@ -14,11 +14,18 @@ cmd="${1:-}"; plan="${2:-}"
 [ -n "$cmd" ] && [ -n "$plan" ] || { echo "usage: lock-hooks.sh write|verify <plan>" >&2; exit 3; }
 LOCK="$ROOT/.claude/build-plans/$plan/hooks.lock"
 ver=$(jq -r .version "$HOOKS/../.claude-plugin/plugin.json" 2>/dev/null || echo unknown)
+# Everything Claude Code loads from this plugin: the scripts, the wiring that decides
+# whether they run at all, and the agent definitions. Hashing the scripts alone let a
+# plugin update change hooks.json or an agent and still verify (F15).
 current() {
   echo "plugin plan-and-verify $ver"
-  for f in lib run-checks verify-milestone accept-milestone snapshot guard-builder lock-hooks ensure-repo; do
-    printf '%s  %s.sh\n' "$(pv_sha256 < "$HOOKS/$f.sh")" "$f"
-  done
+  { for f in "$HOOKS"/*.sh "$HOOKS/hooks.json"; do
+      [ -f "$f" ] && printf '%s  hooks/%s\n' "$(pv_sha256 < "$f")" "$(basename "$f")"
+    done
+    for f in "$HOOKS"/../agents/*.md; do
+      [ -f "$f" ] && printf '%s  agents/%s\n' "$(pv_sha256 < "$f")" "$(basename "$f")"
+    done
+  } | LC_ALL=C sort -k2
 }
 case "$cmd" in
   write)

@@ -69,8 +69,13 @@ i=0; while [ "$i" -lt "$COUNT" ]; do
   to=$(jq -r "$q.timeout // empty" "$CHECKS"); to=${to:-$DEF_TO}
   cwd_rel=$(jq -r "$q.cwd // empty" "$CHECKS"); cwd_rel=${cwd_rel:-$DEF_CWD}
 
-  actual=$(cd "$ROOT/$cwd_rel" 2>/dev/null && PV_TIMEOUT="$to" pv_timeout bash -o pipefail -c "$cmd" 2>&1)
+  # Capture through a file, not a pipe: a command substitution stays open until every
+  # process holding the write end exits, so one orphaned child would outlast the timeout
+  # and stall the run. stdin is closed so a check that reads it cannot wait for input.
+  OUTF=$(mktemp)
+  (cd "$ROOT/$cwd_rel" 2>/dev/null && PV_TIMEOUT="$to" pv_timeout bash -o pipefail -c "$cmd" >"$OUTF" 2>&1 </dev/null)
   code=$?
+  actual=$(cat "$OUTF"); rm -f "$OUTF"
   trimmed=$(printf '%s' "$actual" | sed -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//')
 
   ok=false

@@ -31,3 +31,5 @@ Verdict: ACCEPT | REJECT | ACCEPT-WITH-NOTES
 ```
 
 REJECT only for a failing check, an out-of-scope change, a check that was weakened, or a high-severity finding. Style opinions are low severity and never block.
+
+`Verdict:` must be the last line of your report: an unattended run reads that token and nothing else to decide what happens next. `ACCEPT-WITH-NOTES` means the milestone stands and your notes go into the run log, so use it for anything you would not stop the build for.

@@ -25,7 +25,11 @@ command -v jq >/dev/null || { echo "jq required" >&2; exit 3; }
 cd "$ROOT" || exit 3
 git rev-parse HEAD >/dev/null 2>&1 || { echo "not a git repo with commits" >&2; exit 3; }
 
-refuse() { echo "REFUSED: $*" >&2; exit 2; }
+refuse() {
+  pv_log_event "$ROOT" "$PLAN" hook-events \
+    "$(jq -nc --arg ids "$*" --arg id "${1:-}" '{actor:"hook:accept-milestone",outcome:"refused",detail:$ids}')"
+  echo "REFUSED: $*" >&2; exit 2
+}
 
 # 1. integrity: checks.json and hooks.lock unchanged since last commit, and the
 #    installed scripts are the ones the plan was locked against
@@ -56,7 +60,25 @@ for id in "$@"; do
   [ "$(jq -r .tree_sha "$r")" = "$tree_sha" ] || refuse "$id result is stale: the working tree changed after the checks ran; re-run bash \"$HOOKS\"/run-checks.sh $PLAN $id"
 done
 
-# 3. project status into plan.md, then one commit (no amend, so the sha is final)
+# 3. the branch must still be where this milestone was spawned from. The spawn snapshot's
+#    parent is HEAD at spawn time; between spawn and acceptance only the planner commits,
+#    so any other commit in that range is foreign however its subject reads.
+for id in "$@"; do
+  sref=$(git for-each-ref --sort=-refname --format='%(refname)' "refs/pv/snapshots/$PLAN/$id/" | grep -- '-spawn$' | head -1)
+  [ -n "$sref" ] || continue                      # no snapshot: a manual run, nothing to anchor to
+  sparent=$(git rev-parse -q --verify "$sref^" 2>/dev/null) || continue
+  moved=$(git log --format='%h %s' "$sparent..HEAD" | while read -r short subj; do
+    case "$subj" in ("plan($PLAN):"*) ;; (*) printf '%s "%s"; ' "$short" "$subj" ;; esac
+  done)
+  [ -z "$moved" ] || refuse "HEAD has moved since $id was spawned, by a commit that is not a plan($PLAN) commit: $moved Builders never commit and only the planner commits mid-milestone. Stop and show the user."
+done
+
+# 4. nothing from another plan rides along in this milestone's commit
+stray=$(git status --porcelain --untracked-files=all -- .claude/build-plans |
+        sed 's/^...//' | grep -v "^\.claude/build-plans/$PLAN/" | tr '\n' ' ')
+[ -z "$stray" ] || refuse "these files are under .claude/build-plans but do not belong to plan $PLAN: $stray A milestone commit carries this plan's work only. Remove them, or commit them yourself as a plan(<slug>) commit, then re-run the checks."
+
+# 5. project status into plan.md, then one commit (no amend, so the sha is final)
 for id in "$@"; do
   awk -v id="$id" '
     $0 ~ "^### Milestone "id"$" {f=1}
@@ -67,6 +89,10 @@ done
 [ -n "$(git status --porcelain)" ] || refuse "nothing to commit"
 ids="$*"; first="$1"
 goal=$(awk -v id="$first" '$0 ~ "^### Milestone "id"$" {f=1; next} f && /^goal:/ {sub(/^goal:[ \t]*/,""); print; exit}' "$PLANMD")
-git add -A
+git add -A -- . ':!.claude/build-plans'   # the project's work
+git add -A -- ".claude/build-plans/$PLAN" # and this plan's own files, never another's
 git commit -q -m "milestone($ids): ${goal:-accepted} [$PLAN $ids]" -m "checks: $(for id in "$@"; do r="$DIR/results/$(printf '%s' "$id" | tr ':/' '__').json"; printf '%s pass=%s fail=%s run=%s; ' "$id" "$(jq -r .pass "$r")" "$(jq -r .fail "$r")" "$(jq -r .run_id "$r")"; done)" || refuse "git commit failed"
-echo "ACCEPTED $PLAN [$ids] -> $(git rev-parse --short HEAD)"
+sha=$(git rev-parse --short HEAD)
+pv_log_event "$ROOT" "$PLAN" hook-events \
+  "$(jq -nc --arg id "$ids" --arg sha "$sha" '{actor:"hook:accept-milestone",id:$id,outcome:"accepted",detail:$sha}')"
+echo "ACCEPTED $PLAN [$ids] -> $sha"

@@ -60,4 +60,43 @@ git -C "$R" commit -q -m "plan(other): unrelated" -- "$C"
 checks "$R"; r=$(accept "$R")
 assert_eq "T8 checks.json changed by another plan's commit: refused" 2 "$(code "$r")"
 
+# --- T9-T11 (F37): HEAD must still be where the milestone was spawned from -----------
+# The spawn snapshot's parent records HEAD at spawn. Only the planner commits between
+# spawn and accept, so any other commit in that range is foreign, whatever its subject.
+snap() { (cd "$1" && CLAUDE_PROJECT_DIR="$1" bash "$HOOKS/snapshot.sh" demo 1.1 spawn >/dev/null); }
+
+R=$(mk_repo demo); printf 'ok' > "$R/hello.txt"; snap "$R"
+printf 'src' > "$R/app.txt"; git -C "$R" add app.txt; git -C "$R" commit -q -m "sneak in some code"
+sneak=$(git -C "$R" rev-parse --short HEAD)
+checks "$R"; r=$(accept "$R")
+assert_eq       "T9 a foreign commit after the spawn snapshot: refused" 2 "$(code "$r")"
+assert_contains "T9 reason names the commit" "$sneak" "$(msg "$r")"
+
+R=$(mk_repo demo); printf 'ok ' > "$R/hello.txt"; snap "$R"
+C="$R/.claude/build-plans/demo/checks.json"
+jq '.milestones["1.1"].checks[0].expect = "contains"' "$C" > "$C.new" && mv "$C.new" "$C"
+git -C "$R" commit -q -m "plan(demo): fix the hello check" -- "$C"
+checks "$R"; r=$(accept "$R")
+assert_eq "T10 a plan(<slug>) commit after the spawn snapshot: accepted" 0 "$(code "$r")"
+
+R=$(mk_repo demo); printf 'ok' > "$R/hello.txt"; checks "$R"; r=$(accept "$R")
+assert_eq "T11 no spawn snapshot at all (manual run): still accepted" 0 "$(code "$r")"
+
+# --- T12-T13 (F5): the milestone commit carries this milestone's work, nothing else ---
+R=$(mk_repo demo); printf 'ok' > "$R/hello.txt"
+mkdir -p "$R/.claude/build-plans/STRAY/results"
+printf '{}' > "$R/.claude/build-plans/STRAY/results/hook-misfire.json"
+checks "$R"; r=$(accept "$R")
+assert_eq       "T12 a stray plan directory: refused" 2 "$(code "$r")"
+assert_contains "T12 reason names the stray path" "STRAY" "$(msg "$r")"
+
+rm -rf "$R/.claude/build-plans/STRAY"
+printf 'note' > "$R/scratch.txt"
+checks "$R"; r=$(accept "$R")
+assert_eq        "T13 ordinary project files are still committed" 0 "$(code "$r")"
+files=$(git -C "$R" show --stat --format= --name-only HEAD | tr '\n' ' ')
+assert_contains  "T13 the milestone's own work is in the commit" "hello.txt" "$files"
+assert_contains  "T13 unrelated project files still ride along" "scratch.txt" "$files"
+assert_contains  "T13 this plan's results are in the commit" "results/1.1.json" "$files"
+
 finish
