@@ -14,11 +14,14 @@ tree_sha() { (cd "$REPO" && CLAUDE_PROJECT_DIR="$REPO" bash -c '. "'"$HOOKS"'/li
 
 echo "run-state.sh"
 
-# --- init: the run directory exists and git cannot see anything in it ----------------
+# --- init: creating the run directory must be invisible to git -----------------------
+# Creating it mid-milestone must not change the fingerprint acceptance compares against,
+# or a PASS would go stale the first time any hook logged.
+before=$(tree_sha)
 out=$(rs init demo)
-assert_eq "init creates the run directory" 0 "$([ -d "$RUN" ]; echo $?)"
-assert_contains "init writes a tracked ignore rule" "run/" "$(cat "$REPO/.claude/build-plans/.gitignore" 2>/dev/null)"
-git -C "$REPO" add -A && git -C "$REPO" commit -q -m "plan(demo): add run directory"
+assert_eq    "init creates the run directory" 0 "$([ -d "$RUN" ]; echo $?)"
+assert_empty "creating the run directory leaves the tree clean" "$(porcelain)"
+assert_eq    "creating the run directory does not change the fingerprint" "$before" "$(tree_sha)"
 
 before=$(tree_sha)
 rs log demo '{"event":"note","id":"1.1","decision":"nothing to see"}' >/dev/null
@@ -30,7 +33,7 @@ assert_eq "logging does not change the tree fingerprint" "$before" "$(tree_sha)"
 # --- record: the session's permission mode, from whichever hook event carries it ------
 jq -n --arg cwd "$REPO" '{hook_event_name:"PreToolUse",session_id:"s1",permission_mode:"auto",cwd:$cwd,tool_name:"Bash",tool_input:{command:"ls"}}' |
   (cd "$REPO" && CLAUDE_PROJECT_DIR="$REPO" bash "$HOOKS/run-state.sh" record >/dev/null 2>&1)
-assert_contains "record stores the permission mode" '"permission_mode":"auto"' "$(cat "$RUN/../../.run/session.json" 2>/dev/null)"
+assert_contains "record stores the permission mode" '"permission_mode":"auto"' "$(cat "$RUN/session.json" 2>/dev/null)"
 assert_empty "recording leaves the working tree clean" "$(porcelain)"
 
 # --- heartbeat: the enforcement hooks say what they did ------------------------------

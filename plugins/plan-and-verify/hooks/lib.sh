@@ -113,6 +113,27 @@ pv_write_report() {
   } > "$f"
 }
 
+# Run bookkeeping lives in <plan>/run/, which ignores its own contents. Anything tracked
+# that is written mid-milestone would change the tree fingerprint and make a passing
+# results file stale, so logs must be invisible to git, to snapshots and to acceptance.
+pv_run_dir() {
+  local d="$1/.claude/build-plans/$2/run"
+  [ -d "$1/.claude/build-plans/$2" ] || return 1
+  [ -d "$d" ] || mkdir -p "$d" 2>/dev/null || return 1
+  # The rule ignores itself too: an untracked .gitignore here would count as an untracked
+  # file, change pv_tree_sha, and make a passing results file stale the moment a hook logged.
+  [ -f "$d/.gitignore" ] || printf '*\n' > "$d/.gitignore" 2>/dev/null || return 1
+  printf '%s' "$d"
+}
+
+# Append one JSON object to <plan>/run/<file>.jsonl, stamped with the time. Never fails a
+# caller: a hook that cannot log still has to do its real job.
+pv_log_event() {
+  local root="$1" plan="$2" file="$3" obj="$4" d
+  d=$(pv_run_dir "$root" "$plan") || return 0
+  jq -nc --argjson o "$obj" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{ts:$ts} + $o' >> "$d/$file.jsonl" 2>/dev/null || true
+}
+
 # Fingerprint of the working tree (diff vs HEAD + untracked files), excluding results dirs.
 pv_tree_sha() {
   local root="$1"

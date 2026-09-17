@@ -25,7 +25,11 @@ command -v jq >/dev/null || { echo "jq required" >&2; exit 3; }
 cd "$ROOT" || exit 3
 git rev-parse HEAD >/dev/null 2>&1 || { echo "not a git repo with commits" >&2; exit 3; }
 
-refuse() { echo "REFUSED: $*" >&2; exit 2; }
+refuse() {
+  pv_log_event "$ROOT" "$PLAN" hook-events \
+    "$(jq -nc --arg ids "$*" --arg id "${1:-}" '{actor:"hook:accept-milestone",outcome:"refused",detail:$ids}')"
+  echo "REFUSED: $*" >&2; exit 2
+}
 
 # 1. integrity: checks.json and hooks.lock unchanged since last commit, and the
 #    installed scripts are the ones the plan was locked against
@@ -88,4 +92,7 @@ goal=$(awk -v id="$first" '$0 ~ "^### Milestone "id"$" {f=1; next} f && /^goal:/
 git add -A -- . ':!.claude/build-plans'   # the project's work
 git add -A -- ".claude/build-plans/$PLAN" # and this plan's own files, never another's
 git commit -q -m "milestone($ids): ${goal:-accepted} [$PLAN $ids]" -m "checks: $(for id in "$@"; do r="$DIR/results/$(printf '%s' "$id" | tr ':/' '__').json"; printf '%s pass=%s fail=%s run=%s; ' "$id" "$(jq -r .pass "$r")" "$(jq -r .fail "$r")" "$(jq -r .run_id "$r")"; done)" || refuse "git commit failed"
-echo "ACCEPTED $PLAN [$ids] -> $(git rev-parse --short HEAD)"
+sha=$(git rev-parse --short HEAD)
+pv_log_event "$ROOT" "$PLAN" hook-events \
+  "$(jq -nc --arg id "$ids" --arg sha "$sha" '{actor:"hook:accept-milestone",id:$id,outcome:"accepted",detail:$sha}')"
+echo "ACCEPTED $PLAN [$ids] -> $sha"
