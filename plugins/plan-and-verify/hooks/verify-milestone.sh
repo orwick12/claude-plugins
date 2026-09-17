@@ -61,6 +61,7 @@ fi
 # Every exit path below leaves a heartbeat. An unattended orchestrator cannot otherwise
 # tell "the hook ran and was happy" from "the hook never ran at all".
 agent_id=$(jq -r '.agent_id // ""' <<<"$input")
+rm -f "$(pv_run_dir "$ROOT" "$plan" 2>/dev/null)/open-builder.json" 2>/dev/null || true
 beat() {
   pv_log_event "$ROOT" "$plan" hook-events "$(jq -nc --arg id "$mid" --arg a "$agent_id" \
     --arg o "$1" --arg d "${2:-}" '{actor:"hook:verify-milestone",id:$id,agent:$a,outcome:$o,detail:$d}')"

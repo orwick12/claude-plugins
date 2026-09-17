@@ -70,6 +70,11 @@ post() {
     (cd "$REPO" && CLAUDE_PROJECT_DIR="$REPO" bash "$HOOKS/run-state.sh" post 2>/dev/null)
 }
 P=$'work order\n\nPlan: demo  Milestone: 1.1\nPV_HOOKS: /x'
+# a builder stop, so there is a finish-hook heartbeat for this milestone to report
+jq -n --arg cwd "$REPO" --arg m $'MILESTONE: demo/1.1\nSTATUS: DONE' \
+  '{hook_event_name:"SubagentStop",agent_type:"plan-and-verify:builder-sonnet",agent_id:"ahb2",cwd:$cwd,
+    stop_hook_active:false,last_assistant_message:$m,agent_transcript_path:"/nonexistent"}' |
+  (cd "$REPO" && CLAUDE_PROJECT_DIR="$REPO" bash "$HOOKS/verify-milestone.sh" >/dev/null 2>&1)
 ctx=$(post plan-and-verify:builder-sonnet "$P" | jq -r '.hookSpecificOutput.additionalContext // ""')
 assert_contains "post names the milestone"        "demo/1.1"   "$ctx"
 assert_contains "post reports the results status" "results=PASS" "$ctx"
@@ -92,14 +97,11 @@ assert_contains "a destructive check fails the lint" "exit=2" "$out"
 mv "$C.bak" "$C"
 
 # --- preflight: the mode the plan asks for versus the mode the session is in -----------
-plan_mode() { python3 - "$1" <<'PY'
-import re,sys
-p="'"$REPO"'/.claude/build-plans/demo/plan.md"
-s=open(p).read()
-s = re.sub(r'(?m)^mode:.*$', '', s)
-s = s.replace('# Plan: demo', '# Plan: demo\nmode: ' + sys.argv[1])
-open(p,'w').write(s)
-PY
+PLANMD="$REPO/.claude/build-plans/demo/plan.md"
+plan_mode() {
+  grep -v '^mode:' "$PLANMD" > "$PLANMD.tmp"
+  awk -v m="$1" 'NR==1{print; print "mode: " m; next} {print}' "$PLANMD.tmp" > "$PLANMD"
+  rm -f "$PLANMD.tmp"
 }
 session_mode() { jq -n --arg m "$1" '{ts:"now",session_id:"s",permission_mode:$m,cwd:"x"}' > "$RUN/session.json"; }
 
