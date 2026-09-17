@@ -37,6 +37,7 @@ block_once() {
 }
 
 msg=$(jq -r '.last_assistant_message // ""' <<<"$input")
+src="last assistant message"
 if ! grep -qE "$REF_RE" <<<"$msg"; then
   tp=$(jq -r '.agent_transcript_path // ""' <<<"$input")
   if [ -n "$tp" ] && [ -f "$tp" ]; then
@@ -44,6 +45,7 @@ if ! grep -qE "$REF_RE" <<<"$msg"; then
         | if .type == "tool_use" and .name == "SubagentHandback" then (.input.message // "")
           elif .type == "text" then (.text // "") else empty end
         | select(test("(^|\n)MILESTONE:[ \t]*[A-Za-z0-9._-]+/[A-Za-z0-9._:-]+"))] | last // ""' "$tp" 2>/dev/null)
+    src="handback or text in the agent transcript"
   fi
 fi
 
@@ -55,6 +57,10 @@ plan=${ref%%/*}; mid=${ref#*/}
 if [ ! -f "$ROOT/.claude/build-plans/$plan/checks.json" ]; then
   block_once "Your report names plan '$plan', but this project has no .claude/build-plans/$plan/checks.json. Fix the MILESTONE line to the plan and id in your work order, or end with STATUS: BLOCKED explaining the problem."
 fi
+
+# The report the hook actually verified, kept where the orchestrator can read it: a
+# builder that is sent back cannot deliver a second hand-back (F36).
+pv_write_report "$ROOT" "$plan" "$mid" "$src" "$(jq -r '.agent_id // ""' <<<"$input")" "$msg"
 
 # Honest "I am stuck" lets the builder stop, but a BLOCKED result must
 # overwrite any earlier PASS so it can never authorise acceptance.
@@ -69,7 +75,20 @@ res_dir="$ROOT/.claude/build-plans/$plan/results"; mkdir -p "$res_dir"
 # Recovery point on every finish attempt, so a bad fix round can be undone.
 bash "$HOOKS/snapshot.sh" "$plan" "$mid" finish-attempt >/dev/null 2>&1 || true
 attempts_file="$res_dir/$(printf '%s' "$mid" | tr ':/' '__').attempts"
-n=$(cat "$attempts_file" 2>/dev/null || echo 0)
+# The budget belongs to the agent, not to the milestone: a second builder on the same
+# milestone (an escalation to opus) must get its own fix rounds, while a resumed builder
+# keeps counting. The file holds "<agent id> <n>"; a bare number is the pre-1.2.0 shape.
+agent_id=$(jq -r '.agent_id // ""' <<<"$input")
+prev=$(cat "$attempts_file" 2>/dev/null || echo "")
+prev_agent=${prev% *}; prev_n=${prev##* }
+case "$prev" in *\ *) ;; *) prev_agent=""; prev_n=$prev ;; esac
+case "$prev_n" in ''|*[!0-9]*) prev_n=0 ;; esac
+if [ -n "$agent_id" ] && [ -n "$prev_agent" ] && [ "$prev_agent" != "$agent_id" ]; then
+  n=0                      # a different builder: fresh budget
+else
+  n=$prev_n
+fi
+write_attempts() { printf '%s %s\n' "${agent_id:-unknown}" "$1" > "$attempts_file"; }
 
 if ! lockmsg=$(bash "$HOOKS/lock-hooks.sh" verify "$plan" 2>&1); then
   block "This plan's hooks.lock does not match the installed plan-and-verify scripts (or is missing): $(printf '%s' "$lockmsg" | head -c 600). Nothing you can fix in code; end with STATUS: BLOCKED so the main agent can re-lock and commit."
@@ -78,7 +97,7 @@ out=$(bash "$HOOKS/run-checks.sh" "$plan" "$mid" 2>&1); code=$?
 out=$(printf '%s' "$out" | tail -c 6000)   # stay under the 10k hook output cap
 
 if [ "$code" -eq 0 ]; then
-  echo 0 > "$attempts_file"
+  write_attempts 0
   exit 0
 fi
 
@@ -88,7 +107,7 @@ $out
 Either the MILESTONE line names the wrong plan/id, or checks.json has no checks for it. Fix that, or end with STATUS: BLOCKED explaining the problem."
 fi
 
-n=$((n+1)); echo "$n" > "$attempts_file"
+n=$((n+1)); write_attempts "$n"
 if [ "$n" -ge "$MAX" ]; then
   # Give up looping. Results file records FAIL; main agent must not accept this milestone.
   jq -n --arg n "$n" --arg id "$ref" \
@@ -96,5 +115,5 @@ if [ "$n" -ge "$MAX" ]; then
   exit 0
 fi
 
-block "Acceptance checks FAILED (attempt $n of $MAX). Do not report success. Read the failures below, fix the code (not the checks), re-run 'bash \"$HOOKS/run-checks.sh\" $plan $mid' yourself, then finish with the report format again.
+block "Acceptance checks FAILED (attempt $n of $MAX). Do not report success. Read the failures below, fix the code (not the checks), re-run 'bash \"$HOOKS/run-checks.sh\" $plan $mid' yourself, then finish. Do NOT call SubagentHandback again: it delivers one report per run and a second call is refused. End with your report as your final message instead.
 $out"

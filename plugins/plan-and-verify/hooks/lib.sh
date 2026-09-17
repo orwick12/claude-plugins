@@ -72,6 +72,26 @@ pv_timeout() {
   fi
 }
 
+# The "MILESTONE: <plan>/<id>" line a builder's report must carry, and the ref in it.
+PV_REF_RE='^MILESTONE:[[:space:]]*[A-Za-z0-9._-]+/[A-Za-z0-9._:-]+'
+pv_report_ref() { grep -oE "$PV_REF_RE" <<<"${1:-}" | head -1 | sed -E 's/^MILESTONE:[[:space:]]*//'; }
+
+# Keep a builder's report next to its results: <root> <plan> <id> <source> <agent id> <report>.
+# SubagentHandback delivers one report per run, so a builder sent back by the finish hook
+# cannot deliver its corrected one; disk is where the orchestrator reads it instead. Never
+# creates a directory for a plan this project does not have.
+pv_write_report() {
+  local root="$1" plan="$2" mid="$3" src="$4" agent="$5" msg="$6" d f
+  d="$root/.claude/build-plans/$plan"
+  [ -f "$d/checks.json" ] || return 0
+  mkdir -p "$d/results" || return 0
+  f="$d/results/$(printf '%s' "$mid" | tr ':/' '__').report.md"
+  { printf -- '---\nsource: %s\nagent: %s\nat: %s\n---\n\n' \
+      "$src" "${agent:-unknown}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '%s\n' "$msg"
+  } > "$f"
+}
+
 # Fingerprint of the working tree (diff vs HEAD + untracked files), excluding results dirs.
 pv_tree_sha() {
   local root="$1"
