@@ -14,7 +14,7 @@ An autonomous run does the same work as a supervised one and reaches the same ga
 | What did the builder report? | `results/<id>.report.md`, written by the hook | the hand-back message, which is stale after any block |
 | What happened earlier in this run? | `run/decisions.jsonl` via `run-state.sh brief <slug>` | your own memory of it |
 
-The `pv:` line injected when a builder returns carries the first three at once. Read it, then read the results file.
+The `pv:` line is injected at spawn (Claude Code's Agent tool is asynchronous, so PostToolUse[Agent] fires before the builder has done anything). It is spawn-time and carries no verdict; it says so and names the files to check. The truth is `results/<id>.json`, read AFTER the builder's completion notification, plus the `hook:verify-milestone` heartbeat for that stop.
 
 ## The loop, per milestone
 
@@ -42,7 +42,7 @@ One `$PV_HOOKS` call per Bash invocation. Do not chain them with `&&`: an allow-
 | Tier 2 milestone with `irreversible: yes` | **c** | Stop after the review. |
 | Still failing after the escalation to `builder-opus` | **d** | Stop with both builders' reports. |
 | A gate fails and the repair budget (2) is spent | **d** | Stop. |
-| No results file and no hook heartbeat for that stop | **e** | Stop: enforcement is not wired. Do not resume the builder as if it had merely failed. |
+| After the completion notification: no results file newer than the spawn and no `hook:verify-milestone` heartbeat for that stop | **e** | Stop: enforcement is not wired. Do not resume the builder as if it had merely failed. |
 | `hooks.lock` mismatch, same plugin version | **e** | Stop: the scripts changed under a plan that vouched for them. |
 | `hooks.lock` mismatch, different plugin version | — | Re-lock, commit as `plan(<slug>): re-lock hooks for <version>`, carry on. |
 | A `$PV_HOOKS` call is denied by the permission system | **e** | Stop: the session cannot run its own enforcement. |

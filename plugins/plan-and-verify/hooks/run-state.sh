@@ -108,9 +108,12 @@ case "$cmd" in
     rm -f "$d/open-builder.json"; echo "open-builder marker cleared for $plan" ;;
 
   post)
-    # PostToolUse hook on Agent. A builder's hand-back is its own account of its work;
-    # this line is what actually happened, so the orchestrator never has to take the
-    # report's word for it: the results file, and whether the finish hook ran at all.
+    # PostToolUse hook on Agent. For a builder this fires at SPAWN time: Claude Code's
+    # Agent tool is asynchronous, so this hook runs before the builder has done anything.
+    # A results file only speaks for THIS spawn once it postdates it; agent-guard.sh's
+    # open-builder.json marker (written at spawn, with the same milestone id) is the only
+    # record of when that was. Older or missing results are the previous run's, or none,
+    # and the line has to say so instead of handing the orchestrator a stale verdict.
     input=$(cat)
     [ "$(jq -r '.tool_name // ""' <<<"$input")" = "Agent" ] || exit 0
     sub=$(jq -r '.tool_input.subagent_type // ""' <<<"$input")
@@ -126,8 +129,33 @@ case "$cmd" in
     [ -f "$dir/checks.json" ] || exit 0
     safe=$(printf '%s' "$mid" | tr ':/' '__')
     res="$dir/results/$safe.json"
+    rundir=$(pv_run_dir "$ROOT" "$plan")
+    marker="$rundir/open-builder.json"
+
+    spawn_epoch=""
+    if [ -f "$marker" ] && [ "$(jq -r '.id // ""' "$marker" 2>/dev/null)" = "$mid" ]; then
+      spawn_epoch=$(jq -r '.epoch // ""' "$marker" 2>/dev/null)
+    fi
+    if [ -n "$spawn_epoch" ]; then
+      post_spawn=0
+      if [ -f "$res" ]; then
+        # fromdateiso8601 needs ran_at exactly as run-checks.sh writes it; anything else
+        # (or a missing field) fails the parse, and an unparsable value counts as pre-spawn.
+        ran_epoch=$(jq -r '(.ran_at // "") as $r | if $r == "" then "" else ($r|fromdateiso8601) end' "$res" 2>/dev/null)
+        case "$ran_epoch" in
+          ''|*[!0-9]*) ;;
+          *) [ "$ran_epoch" -gt "$spawn_epoch" ] && post_spawn=1 ;;
+        esac
+      fi
+      if [ "$post_spawn" -eq 0 ]; then
+        jq -nc --arg c "pv: $plan/$mid builder spawned; this line is spawn-time and carries no verdict. Wait for the builder's completion notification, then read .claude/build-plans/$plan/results/$safe.json (status is the truth) and confirm a hook:verify-milestone line for $mid in .claude/build-plans/$plan/run/hook-events.jsonl." \
+          '{hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$c}}'
+        exit 0
+      fi
+    fi
+
     status=MISSING; [ -f "$res" ] && status=$(jq -r '.status // "MISSING"' "$res" 2>/dev/null)
-    beats=$(pv_run_dir "$ROOT" "$plan")/hook-events.jsonl
+    beats="$rundir/hook-events.jsonl"
     hb=no
     if [ -f "$beats" ] && [ "$(jq -s -r --arg id "$mid" \
          'any(.[]; .actor == "hook:verify-milestone" and .id == $id)' "$beats" 2>/dev/null)" = true ]; then hb=yes; fi
