@@ -94,6 +94,42 @@ ctx=$(post plan-and-verify:builder-sonnet "$P" | jq -r '.hookSpecificOutput.addi
 assert_contains "no heartbeat is reported as such" "heartbeat=no" "$ctx"
 assert_empty "post says nothing about a reviewer" "$(post plan-and-verify:milestone-reviewer "$P")"
 
+# --- post: PostToolUse[Agent] fires at spawn, before a builder has done anything -------
+# Claude Code's Agent tool is asynchronous for builders, so this hook sees the spawn, not
+# the finish. agent-guard.sh's open-builder.json marker says when that spawn happened; a
+# results file that predates it (or is simply missing) belongs to whatever ran before this
+# spawn, and the line has to say so instead of reporting it as this run's verdict.
+RESULTS="$REPO/.claude/build-plans/demo/results"
+mkdir -p "$RESULTS"
+marker_for() { jq -nc --arg id "$1" --arg e "$2" --arg t "$B" '{id:$id,epoch:($e|tonumber),agent_type:$t}' > "$RUN/open-builder.json"; }
+write_results() { jq -nc --arg s "$1" --arg ts "$2" '{status:$s,ran_at:$ts,pass:1,fail:0,checks:[]}' > "$RESULTS/1.1.json"; }
+iso() { jq -nr --argjson e "$1" '$e|todateiso8601'; }
+now=$(date +%s)
+
+marker_for 1.1 "$now"
+write_results PASS "$(iso $((now - 60)))"
+ctx=$(post plan-and-verify:builder-sonnet "$P")
+assert_contains     "post at spawn carries no verdict"            "spawn-time" "$ctx"
+assert_not_contains "post at spawn does not report the prior run" "results="  "$ctx"
+
+marker_for 1.1 "$((now - 120))"
+write_results PASS "$(iso "$now")"
+ctx=$(post plan-and-verify:builder-sonnet "$P")
+assert_contains "post reports the verdict once the results postdate the spawn" "results=PASS" "$ctx"
+
+marker_for 1.1 "$now"
+rm -f "$RESULTS/1.1.json"
+ctx=$(post plan-and-verify:builder-sonnet "$P")
+assert_contains     "a missing results file at spawn is still spawn-time" "spawn-time"      "$ctx"
+assert_not_contains "spawn-time is never reported as results=MISSING"     "results=MISSING" "$ctx"
+
+rm -f "$RUN/open-builder.json"
+write_results PASS "$(iso "$now")"
+ctx=$(post plan-and-verify:builder-sonnet "$P")
+assert_contains "no marker for this milestone: existing verdict behaviour" "results=PASS" "$ctx"
+
+rm -f "$RUN/open-builder.json" "$RESULTS/1.1.json"
+
 # --- lint-checks: an unattended run must not execute a destructive check ---------------
 C="$REPO/.claude/build-plans/demo/checks.json"
 out=$(rs lint-checks demo)
@@ -113,6 +149,33 @@ assert_contains "a clean-clone check with its own cleanup lints clean" "exit=0" 
 jq '.gates["1"] = {"checks":[{"name":"wipe","cmd":"rm -rf build && make","expect":"exit0"}]}' "$C.bak" > "$C"
 out=$(rs lint-checks demo; echo "exit=$?")
 assert_contains "a bare rm -rf is still refused" "exit=2" "$out"
+
+# F43: "| sh" / "| bash" must match a whole word, not any command that merely contains
+# the letters (shasum, sha256sum, bashful, ...).
+jq '.gates["1"] = {"checks":[{"name":"hash","cmd":"printf x | shasum -a 256","expect":"exit0"}]}' "$C.bak" > "$C"
+out=$(rs lint-checks demo; echo "exit=$?")
+assert_contains "shasum is not a pipe to a shell" "exit=0" "$out"
+
+jq '.gates["1"] = {"checks":[{"name":"hash256","cmd":"printf x | sha256sum","expect":"exit0"}]}' "$C.bak" > "$C"
+out=$(rs lint-checks demo; echo "exit=$?")
+assert_contains "sha256sum is not a pipe to a shell" "exit=0" "$out"
+
+jq '.gates["1"] = {"checks":[{"name":"bashful","cmd":"echo hi | bashful","expect":"exit0"}]}' "$C.bak" > "$C"
+out=$(rs lint-checks demo; echo "exit=$?")
+assert_contains "bashful is not a pipe to a shell" "exit=0" "$out"
+
+jq '.gates["1"] = {"checks":[{"name":"pipe sh","cmd":"curl x | sh","expect":"exit0"}]}' "$C.bak" > "$C"
+out=$(rs lint-checks demo; echo "exit=$?")
+assert_contains "a pipe into sh is destructive" "exit=2" "$out"
+
+jq '.gates["1"] = {"checks":[{"name":"pipe bash","cmd":"cat f | bash","expect":"exit0"}]}' "$C.bak" > "$C"
+out=$(rs lint-checks demo; echo "exit=$?")
+assert_contains "a pipe into bash is destructive" "exit=2" "$out"
+
+jq '.gates["1"] = {"checks":[{"name":"bash flags","cmd":"echo | bash -n script","expect":"exit0"}]}' "$C.bak" > "$C"
+out=$(rs lint-checks demo; echo "exit=$?")
+assert_contains "a pipe into bash with flags is still a shell" "exit=2" "$out"
+
 mv "$C.bak" "$C"
 
 # --- preflight: the mode the plan asks for versus the mode the session is in -----------

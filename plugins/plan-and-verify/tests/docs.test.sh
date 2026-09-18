@@ -22,6 +22,9 @@ assert_contains "skill points at the autonomous reference" "references/autonomou
 assert_contains "skill runs preflight before building"     "preflight"                    "$(cat "$SKILL")"
 assert_contains "skill asks the user which mode"           "mode: supervised"             "$(cat "$SKILL")"
 assert_contains "skill reads the report the hook wrote"    "report.md"                    "$(cat "$SKILL")"
+assert_contains "skill says the spawn-time line carries no verdict" "spawn-time"           "$(cat "$SKILL")"
+assert_not_contains "skill no longer claims the pv: line states both" \
+  "a \`pv: <slug>/<id> results=" "$(cat "$SKILL")"
 
 # --- the reference covers every stop condition and never asks a question ---------------
 for c in a b c d e; do
@@ -31,6 +34,13 @@ assert_contains     "reference has the halt template"      "HALT <class>"      "
 assert_contains     "reference forbids AskUserQuestion"    "Never \`AskUserQuestion\`" "$(cat "$REF")"
 assert_contains     "reference keeps one call per Bash"    "chain them with"   "$(cat "$REF")"
 assert_contains     "reference verifies the citation"      "grep -F"           "$(cat "$REF")"
+
+# --- F40: the pv: line at spawn carries no verdict, the results file does --------------
+assert_contains     "reference says the spawn-time line carries no verdict" "spawn-time" "$(cat "$REF")"
+assert_not_contains "reference no longer claims the line carries all three" \
+  "carries the first three at once" "$(cat "$REF")"
+assert_contains "reference's class e is keyed to the completion notification" \
+  "After the completion notification" "$(cat "$REF")"
 
 # --- agents ----------------------------------------------------------------------------
 A="$P/agents/check-adjudicator.md"

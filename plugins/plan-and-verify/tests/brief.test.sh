@@ -33,6 +33,29 @@ out=$(rs milestone demo 1.2)
 assert_contains     "milestone prints the right block"       "see-you"         "$out"
 assert_contains     "milestone keeps the work order"         "exactly see-you" "$out"
 
+# --- milestone stops at the next phase heading, not just the next milestone -----------
+# A plan has "## Phase N" headers between phases; the last milestone of a phase has no
+# "### Milestone" after it until the next phase's first one, so it used to swallow the
+# phase heading (and anything under it) along with its own block.
+cat >> "$DIR/plan.md" <<'EOF'
+
+## Phase 2: next
+Phase 2 starts here.
+
+### Milestone 2.1
+goal: Write next.txt containing next.
+status: TODO
+irreversible: no
+context: |
+  Write next.txt containing exactly next.
+EOF
+out=$(rs milestone demo 1.2)
+assert_not_contains "the last milestone of a phase does not leak the next phase's heading" "Phase 2" "$out"
+assert_contains     "the last milestone of a phase still prints its own lines"             "see-you" "$out"
+out=$(rs milestone demo 2.1)
+assert_contains "the next phase's milestone prints intact" "Write next.txt"              "$out"
+assert_contains "the next phase's milestone keeps its context" "exactly next"            "$out"
+
 # --- brief before anything is built ---------------------------------------------------
 out=$(rs brief demo)
 assert_contains "brief names the plan"                 "demo"       "$out"
