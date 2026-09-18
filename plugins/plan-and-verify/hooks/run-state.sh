@@ -181,11 +181,18 @@ case "$cmd" in
       case "$scan" in
         *"mktemp -d"*) scan=$(printf '%s' "$scan" | sed -E 's/rm[[:space:]]+-[rf][rf][[:space:]]+"?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?"?//g') ;;
       esac
+      hit=0
       case "$scan" in
         *"rm -rf"*|*"rm -fr"*|*"git clean"*|*"git reset --hard"*|*"git push"*|*"DROP TABLE"*|*"DROP DATABASE"*|\
-        *"TRUNCATE"*|*dropdb*|*"kubectl delete"*|*"terraform apply"*|*"terraform destroy"*|*"aws s3 rm"*|*"| sh"*|*"| bash"*|*"> .env"*)
-          printf 'DESTRUCTIVE  %s %s: %s\n' "$where" "$name" "$cmd"; bad=1 ;;
+        *"TRUNCATE"*|*dropdb*|*"kubectl delete"*|*"terraform apply"*|*"terraform destroy"*|*"aws s3 rm"*|*"> .env"*)
+          hit=1 ;;
       esac
+      # A bare pipe into sh/bash, matched as a whole word so a longer command that merely
+      # contains the letters (shasum, sha256sum, bashful, ...) is not caught by the substring.
+      printf '%s' "$scan" | grep -qE '\|[[:space:]]*(sh|bash)([[:space:]]|$)' && hit=1
+      if [ "$hit" -eq 1 ]; then
+        printf 'DESTRUCTIVE  %s %s: %s\n' "$where" "$name" "$cmd"; bad=1
+      fi
     done <<EOF
 $(jq -r '(.milestones // {} | to_entries[] | .key as $k | .value.checks[]? | [$k, .name, .cmd]),
          (.gates // {} | to_entries[] | ("gate:" + .key) as $k | .value.checks[]? | [$k, .name, .cmd])
