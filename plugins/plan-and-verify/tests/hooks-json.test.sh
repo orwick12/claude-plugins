@@ -30,4 +30,10 @@ for a in "$HOOKS"/../agents/*.md; do
   assert_eq "$(basename "$a") has no frontmatter hooks" 0 \
     "$(awk '/^---$/{n++; next} n==1 && /^hooks:/{print "1"; exit}' "$a" | wc -l | tr -d ' ')"
 done
+# F46: a resumed builder is not an Agent tool call, so PreToolUse never sees it. SubagentStart
+# fires for a resume as well as for a spawn, and is where the marker is re-armed.
+assert_eq       "SubagentStart entry has no matcher" false "$(jq '.hooks.SubagentStart[0] | has("matcher")' "$J")"
+assert_contains "SubagentStart runs agent-guard.sh"  "agent-guard.sh" "$(jq -r '.hooks.SubagentStart[0].hooks[0].command' "$J")"
+assert_contains "SubagentStart runs its start path"  "start"          "$(jq -r '.hooks.SubagentStart[0].hooks[0].command' "$J")"
+
 finish

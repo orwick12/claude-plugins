@@ -84,4 +84,17 @@ out=$(rs brief demo)
 assert_contains "brief shows the last decision"   "builder asked which store" "$out"
 assert_contains "brief shows its class"           "a"                         "$out"
 
+# --- the markers of the builders that are open, or stopped and not yet accepted ---------
+mkdir -p "$DIR/run/open"
+jq -nc '{id:"1.2",agent_type:"plan-and-verify:builder-sonnet",state:"stopped",epoch:0,agent_id:"a1"}' \
+  > "$DIR/run/open/1.2.json"
+jq -nc '{id:"2.1",agent_type:"plan-and-verify:builder-opus",state:"open",epoch:0}' \
+  > "$DIR/run/open/2.1.json"
+out=$(rs brief demo)
+assert_contains "brief lists the open builders"     "open builders:"  "$out"
+assert_contains "brief says a stopped one stopped"  "stopped"         "$out"
+assert_contains "brief says an open one is open"    "2.1    open"     "$out"
+assert_contains "brief names the agent type"        "builder-opus"    "$out"
+rm -rf "$DIR/run/open"
+
 finish

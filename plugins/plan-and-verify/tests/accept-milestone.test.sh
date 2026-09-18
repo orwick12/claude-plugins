@@ -99,4 +99,20 @@ assert_contains  "T13 the milestone's own work is in the commit" "hello.txt" "$f
 assert_contains  "T13 unrelated project files still ride along" "scratch.txt" "$files"
 assert_contains  "T13 this plan's results are in the commit" "results/1.1.json" "$files"
 
+# --- T14 (F22): a parallel group's results go stale as the other member keeps working ----
+# The first member to finish has a PASS against a tree the second member is still editing,
+# so the one-call acceptance refuses — correctly, and with no way out unless the refusal
+# says what the way out is.
+accept2() { local o c; o=$(cd "$1" && CLAUDE_PROJECT_DIR="$1" bash "$HOOKS/accept-milestone.sh" demo 1.1 1.2 2>&1); c=$?; printf '%s|%s' "$c" "$o"; }
+R=$(mk_repo demo); printf 'ok' > "$R/hello.txt"; checks "$R"
+printf 'sibling still working' > "$R/other.txt"
+r=$(accept "$R")
+assert_eq           "T14 one id, stale results: refused" 2 "$(code "$r")"
+assert_not_contains "T14 a single-id refusal says nothing about groups" "parallel group" "$(msg "$r")"
+r=$(accept2 "$R")
+assert_eq       "T14 two ids, stale results: refused" 2 "$(code "$r")"
+assert_contains "T14 the group refusal says to re-run every member's checks" \
+  "re-run every member's checks after the last member finishes" "$(msg "$r")"
+assert_contains "T14 the group refusal says the group is accepted in one call" "one call" "$(msg "$r")"
+
 finish

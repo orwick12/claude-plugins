@@ -152,4 +152,23 @@ assert_eq       "F42 BLOCKED with no earlier run: stub says BLOCKED" BLOCKED "$(
 assert_eq       "F42 BLOCKED with no earlier run: no checks claimed" 0 "$(jq -r '.checks | length' "$R2RES")"
 assert_contains "F42 BLOCKED with no earlier run: blocked_at is stamped" "Z" "$(jq -r .blocked_at "$R2RES")"
 
+# --- F46: a stop leaves the milestone's marker behind, stopped -------------------------
+# The marker is how the guard knows a milestone is still unfinished. Deleting it at the
+# stop made the tree look free while the builder was only paused, so the next spawn
+# started a second writer. The marker is retired by acceptance, not by stopping.
+R3=$(mk_repo demo)
+OPEN3="$R3/.claude/build-plans/demo/run/open"
+mkdir -p "$OPEN3"
+jq -nc --arg t "$B" --arg e "$(date +%s)" '{id:"1.1",agent_type:$t,state:"open",epoch:($e|tonumber)}' > "$OPEN3/1.1.json"
+printf 'ok' > "$R3/hello.txt"
+out=$(jq -n --arg cwd "$R3" --arg m "$REPORT_DONE" \
+  '{hook_event_name:"SubagentStop",agent_type:"plan-and-verify:builder-sonnet",agent_id:"astop",cwd:$cwd,
+    stop_hook_active:false,last_assistant_message:$m,agent_transcript_path:"/nonexistent"}' |
+  CLAUDE_PROJECT_DIR="$R3" bash "$HOOKS/verify-milestone.sh" 2>/dev/null)
+assert_empty    "F46 a passing stop is still allowed"        "$out"
+assert_eq       "F46 the marker survives the stop"           0 "$([ -f "$OPEN3/1.1.json" ]; echo $?)"
+assert_eq       "F46 the marker says the builder stopped"    stopped "$(jq -r '.state // ""' "$OPEN3/1.1.json")"
+assert_eq       "F46 the marker records the agent that stopped" astop "$(jq -r '.agent_id // ""' "$OPEN3/1.1.json")"
+assert_contains "F46 stopped_at is stamped"                  "Z" "$(jq -r '.stopped_at // ""' "$OPEN3/1.1.json")"
+
 finish

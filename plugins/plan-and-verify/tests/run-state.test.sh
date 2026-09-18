@@ -96,12 +96,13 @@ assert_empty "post says nothing about a reviewer" "$(post plan-and-verify:milest
 
 # --- post: PostToolUse[Agent] fires at spawn, before a builder has done anything -------
 # Claude Code's Agent tool is asynchronous for builders, so this hook sees the spawn, not
-# the finish. agent-guard.sh's open-builder.json marker says when that spawn happened; a
+# the finish. agent-guard.sh's marker in run/open/ says when that spawn happened; a
 # results file that predates it (or is simply missing) belongs to whatever ran before this
 # spawn, and the line has to say so instead of reporting it as this run's verdict.
 RESULTS="$REPO/.claude/build-plans/demo/results"
 mkdir -p "$RESULTS"
-marker_for() { jq -nc --arg id "$1" --arg e "$2" --arg t "$B" '{id:$id,epoch:($e|tonumber),agent_type:$t}' > "$RUN/open-builder.json"; }
+mkdir -p "$RUN/open"
+marker_for() { jq -nc --arg id "$1" --arg e "$2" --arg t "$B" '{id:$id,epoch:($e|tonumber),agent_type:$t,state:"open"}' > "$RUN/open/$1.json"; }
 write_results() { jq -nc --arg s "$1" --arg ts "$2" '{status:$s,ran_at:$ts,pass:1,fail:0,checks:[]}' > "$RESULTS/1.1.json"; }
 iso() { jq -nr --argjson e "$1" '$e|todateiso8601'; }
 now=$(date +%s)
@@ -123,12 +124,12 @@ ctx=$(post plan-and-verify:builder-sonnet "$P")
 assert_contains     "a missing results file at spawn is still spawn-time" "spawn-time"      "$ctx"
 assert_not_contains "spawn-time is never reported as results=MISSING"     "results=MISSING" "$ctx"
 
-rm -f "$RUN/open-builder.json"
+rm -f "$RUN/open/1.1.json"
 write_results PASS "$(iso "$now")"
 ctx=$(post plan-and-verify:builder-sonnet "$P")
 assert_contains "no marker for this milestone: existing verdict behaviour" "results=PASS" "$ctx"
 
-rm -f "$RUN/open-builder.json" "$RESULTS/1.1.json"
+rm -f "$RUN/open/1.1.json" "$RESULTS/1.1.json"
 
 # --- lint-checks: an unattended run must not execute a destructive check ---------------
 C="$REPO/.claude/build-plans/demo/checks.json"
@@ -199,5 +200,119 @@ session_mode plan
 assert_contains "plan mode refuses to build" "REFUSED" "$(rs preflight demo)"
 plan_mode supervised; session_mode default
 assert_contains "a supervised plan is supervised" "SUPERVISED" "$(rs preflight demo)"
+
+# --- clear-open: a marker is cleared when its builder is gone, not while it is working --
+# The marker is what stops a second writer, so clearing it is how a dead session is
+# recovered and exactly how a live milestone would be trampled. Hence: stopped clears,
+# open refuses, and a run older than six hours is stale whatever it says.
+mkdir -p "$RUN/open"
+mk_marker() {   # <id> <state> [epoch]
+  jq -nc --arg id "$1" --arg s "$2" --arg e "${3:-$(date +%s)}" --arg t "$B" \
+    '{id:$id,agent_type:$t,state:$s,epoch:($e|tonumber)}' > "$RUN/open/$1.json"
+}
+clear_confirmed() { (cd "$REPO" && CLAUDE_PROJECT_DIR="$REPO" PV_CONFIRM_CLEAR=yes bash "$HOOKS/run-state.sh" clear-open "$@" 2>&1); }
+
+rm -f "$RUN"/open/*.json
+mk_marker 1.1 open
+out=$(rs clear-open demo 1.1; echo "exit=$?")
+assert_contains "clear-open refuses a live builder"          "exit=2"           "$out"
+assert_contains "the refusal names the milestone"            "1.1"              "$out"
+assert_contains "the refusal names the confirmation"         "PV_CONFIRM_CLEAR=yes" "$out"
+assert_eq       "and the marker is still there"              0 "$([ -f "$RUN/open/1.1.json" ]; echo $?)"
+out=$(clear_confirmed demo 1.1; echo "exit=$?")
+assert_contains    "PV_CONFIRM_CLEAR=yes clears a live builder" "exit=0" "$out"
+assert_path_absent "and the marker is gone"                     "$RUN/open/1.1.json"
+
+mk_marker 1.1 stopped
+out=$(rs clear-open demo 1.1; echo "exit=$?")
+assert_contains    "clear-open clears a stopped builder" "exit=0" "$out"
+assert_path_absent "the stopped marker is gone"          "$RUN/open/1.1.json"
+
+mk_marker 1.1 open "$(( $(date +%s) - 25000 ))"
+out=$(rs clear-open demo 1.1; echo "exit=$?")
+assert_contains    "an open marker older than six hours is stale, not live" "exit=0" "$out"
+assert_path_absent "the stale marker is gone" "$RUN/open/1.1.json"
+
+mk_marker 1.1 stopped; mk_marker 1.2 open
+out=$(rs clear-open demo)
+assert_path_absent "clear-open with no id clears every stopped marker" "$RUN/open/1.1.json"
+assert_eq          "clear-open with no id leaves a live builder alone" 0 "$([ -f "$RUN/open/1.2.json" ]; echo $?)"
+assert_contains    "and says which one it kept"                        "1.2" "$out"
+rm -f "$RUN"/open/*.json
+
+# --- preflight: a parallel group that cannot work must not reach a builder --------------
+# The guard lets a group's members write the same tree at once. That is only safe when the
+# group really is a group: two or more members, one phase, each with its own scope.
+G=$(mk_repo grp); GP="$G/.claude/build-plans/grp/plan.md"
+gpre() { (cd "$G" && CLAUDE_PROJECT_DIR="$G" bash "$HOOKS/run-state.sh" preflight grp 2>&1); }
+assert_not_contains "a plan with no groups says nothing about groups" "parallel group" "$(gpre)"
+
+cat > "$GP" <<'EOF'
+# Plan: grp
+
+## Phase 1: one
+### Milestone 1.1
+goal: a
+scope: dir-a/
+parallel-group: g
+status: TODO
+EOF
+assert_contains "a group with a single member fails preflight" "group g has only one member" "$(gpre)"
+
+cat > "$GP" <<'EOF'
+# Plan: grp
+
+## Phase 1: one
+### Milestone 1.1
+goal: a
+scope: dir-a/
+parallel-group: g
+status: TODO
+
+## Phase 2: two
+### Milestone 2.1
+goal: b
+scope: dir-b/
+parallel-group: g
+status: TODO
+EOF
+assert_contains "a group spanning two phases fails preflight" "group g spans phases" "$(gpre)"
+
+cat > "$GP" <<'EOF'
+# Plan: grp
+
+## Phase 1: one
+### Milestone 1.1
+goal: a
+scope: dir-a/
+parallel-group: g
+status: TODO
+
+### Milestone 1.2
+goal: b
+parallel-group: g
+status: TODO
+EOF
+assert_contains "a group member with no scope fails preflight" "group g has members with no scope" "$(gpre)"
+
+cat > "$GP" <<'EOF'
+# Plan: grp
+
+## Phase 1: one
+### Milestone 1.1
+goal: a
+scope: dir-a/
+parallel-group: g
+status: TODO
+
+### Milestone 1.2
+goal: b
+scope: dir-b/
+parallel-group: g
+status: TODO
+EOF
+out=$(gpre)
+assert_contains     "a well-formed group passes preflight" "ok     parallel groups well-formed" "$out"
+assert_not_contains "and is not reported as malformed"     "parallel groups malformed"          "$out"
 
 finish
