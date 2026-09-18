@@ -26,7 +26,9 @@ goal: <one sentence>
 scope: <paths>
 out-of-scope: <paths>
 depends-on: <ids or none>
-parallel-group: none   (opt-in only; see SKILL.md field rules)
+parallel-group: none   (opt-in only; see SKILL.md field rules. The spawn guard lets builders run at the same time
+                        only for members of the same `parallel-group`; each member's checks stay scoped to its own
+                        directories, and the group is accepted in one call after every member's checks are re-run)
 model: sonnet | opus
 needs-planning: no | yes — <what the planning step must produce>
 review: 0 | 1 | 2

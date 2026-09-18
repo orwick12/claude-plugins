@@ -70,6 +70,7 @@ Absence checks (regressions, hygiene):
 - `grep -rn 'console.log' src/auth || true` with `equals` `""`
 - `grep -rn 'TODO(milestone-2.3)' src || true` with `equals` `""` (builder must resolve its own markers)
 - `git diff --name-only HEAD | grep -vE '^(src/auth/|\.claude/build-plans/)' || true` with `equals` `""` (nothing outside scope changed; `HEAD` is the last accepted milestone because execution commits per milestone)
+- in a `parallel-group`, the same check must also exclude the sibling members' scopes: `git diff --name-only HEAD | grep -vE '^(src/auth/|src/billing/|\.claude/build-plans/)' || true` with `equals` `""` (a sibling builder is editing `src/billing/` while your checks run, so a scope-only pattern reports its files as yours and the check fails for work you did not do)
 
 Data and migrations:
 - `psql "$DATABASE_URL" -tAc "select count(*) from information_schema.columns where table_name='users' and column_name='deleted_at'"` with `equals` `"1"`

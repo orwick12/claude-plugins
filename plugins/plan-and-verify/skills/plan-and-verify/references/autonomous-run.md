@@ -25,7 +25,7 @@ The `pv:` line is injected at spawn (Claude Code's Agent tool is asynchronous, s
 4. `snapshot.sh <slug> <id> spawn`, then spawn exactly one builder with the work order.
 5. When it returns, read the results file. `PASS` → review tier decides; `FAIL`/`BLOCKED`/missing → classify below.
 6. Tier 1, or tier 2 with `irreversible: no` → reviewer; `Verdict:` is the only line that decides: `ACCEPT` and `ACCEPT-WITH-NOTES` go on to step 7, `REJECT` does not. Read its findings in `results/<id>.review.md` and keep every note for the end report. Tier 2 with `irreversible: yes` → stop and show the user (class c).
-7. `accept-milestone.sh <slug> <id>`. On refusal, do what the message says once; a second refusal of the same kind is class (e).
+7. `accept-milestone.sh <slug> <id>`. For a parallel group, re-run every member's checks after the last member finishes — each member's results went stale while its siblings worked — then accept the whole group in one call. On refusal, do what the message says once; a second refusal of the same kind is class (e).
 8. Log every decision as you make it: `run-state.sh log <slug> '<json>'`.
 
 One `$PV_HOOKS` call per Bash invocation. Do not chain them with `&&`: an allow-rule has to match each subcommand separately, and a chained call is what turns an unattended run into a permission prompt.
