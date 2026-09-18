@@ -74,4 +74,23 @@ assert_contains "agent-guard is registered on Agent"   "agent-guard.sh"       "$
 assert_contains "the recorder is registered"           "run-state.sh"         "$(jq -r '.hooks.PreToolUse[] | .hooks[0].command' "$J" | tr '\n' ' ')"
 assert_contains "post is registered on Agent"          "run-state.sh"         "$(jq -r '.hooks.PostToolUse[] | select(.matcher == "Agent") | .hooks[0].command' "$J")"
 
+# --- F46/F44/F23/F24: the docs describe the guard that now exists -----------------------
+RD="$P/README.md"
+REFA="$P/skills/plan-and-verify/references/acceptance-checks.md"
+assert_contains "README says a resume is guarded through SubagentStart" "SubagentStart" "$(cat "$RD")"
+assert_contains "README says parallel groups are honoured"              "parallel-group" "$(cat "$RD")"
+assert_contains "README says how a dead session's marker is cleared"    "PV_CONFIRM_CLEAR" "$(cat "$RD")"
+
+assert_contains "skill says only one group may build concurrently" "members of the same \`parallel-group\`" "$(cat "$SKILL")"
+assert_contains "skill says a member's checks stay in its own directories" "scoped to its own directories" "$(cat "$SKILL")"
+assert_contains "skill says a group is re-checked before the one-call accept" "re-run every member's checks" "$(cat "$SKILL")"
+assert_contains "skill passes the sibling scopes to the reviewer of a group member" "sibling" "$(cat "$SKILL")"
+assert_contains "template repeats the group rule" "members of the same \`parallel-group\`" "$(cat "$TPL")"
+assert_contains "the autonomous loop re-runs every member's checks before accepting" \
+  "re-run every member's checks" "$(cat "$REF")"
+
+assert_contains "the reviewer is given its siblings' scopes"              "sibling" "$(cat "$REV")"
+assert_contains "the reviewer does not call a sibling's files out of scope" "out of scope" "$(cat "$REV")"
+assert_contains "the check reference has a group-safe out-of-scope pattern" "sibling" "$(cat "$REFA")"
+
 finish
