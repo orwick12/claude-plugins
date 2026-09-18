@@ -88,8 +88,17 @@ case "$cmd" in
       fi
     done
     [ -n "$next" ] && echo "next: $next" || echo "next: none (every milestone has a commit)"
-    m="$dir/run/open-builder.json"
-    [ -f "$m" ] && echo "open builder: $(jq -r '.id + " (" + .agent_type + ")"' "$m" 2>/dev/null)"
+    # Every milestone with a marker: open (a builder is writing) or stopped (a builder
+    # finished a run but the milestone is not accepted, so the next one still waits).
+    hdr=""
+    for m in "$dir"/run/open/*.json; do
+      [ -f "$m" ] || continue
+      [ -n "$hdr" ] || { echo "open builders:"; hdr=1; }
+      IFS=$(printf '\t') read -r mid mst mat <<EOF
+$(jq -r '[(.id // "?"), (.state // "open"), (.agent_type // "?")] | @tsv' "$m" 2>/dev/null)
+EOF
+      printf '  %-6s %-7s %s\n' "$mid" "$mst" "$mat"
+    done
     d="$dir/run/decisions.jsonl"
     if [ -f "$d" ]; then
       echo "last decisions:"
@@ -104,15 +113,46 @@ case "$cmd" in
     fi ;;
 
   clear-open)
-    plan="${2:-}"; [ -n "$plan" ] || { echo "usage: run-state.sh clear-open <plan>" >&2; exit 3; }
+    # A marker is the only thing between the next spawn and a second writer in this tree,
+    # so clearing one is recovery, not housekeeping. A stopped builder's marker goes
+    # freely; a live one is refused unless PV_CONFIRM_CLEAR=yes says its session is dead;
+    # one older than six hours is a leftover whatever it claims. With no id, every stopped
+    # marker goes and a live one is merely reported.
+    plan="${2:-}"; id="${3:-}"
+    [ -n "$plan" ] || { echo "usage: run-state.sh clear-open <plan> [<id>]" >&2; exit 3; }
     ROOT=$(pv_root); d=$(pv_run_dir "$ROOT" "$plan") || exit 3
-    rm -f "$d/open-builder.json"; echo "open-builder marker cleared for $plan" ;;
+    now=$(date +%s); rc=0; cleared=0
+    clear_one() {                                   # <marker> <strict|keep>
+      local m="$1" strict="$2" mid st at
+      mid=$(jq -r '.id // ""' "$m" 2>/dev/null); [ -n "$mid" ] || mid=$(basename "$m" .json)
+      st=$(jq -r '.state // "open"' "$m" 2>/dev/null)
+      at=$(jq -r '.epoch // 0' "$m" 2>/dev/null); case "$at" in ''|*[!0-9]*) at=0 ;; esac
+      if [ "$st" != "stopped" ] && [ $((now - at)) -lt 21600 ] && [ "${PV_CONFIRM_CLEAR:-}" != "yes" ]; then
+        if [ "$strict" = strict ]; then
+          echo "REFUSED: milestone $mid still has an open builder (spawned $(( (now - at) / 60 )) minutes ago). Wait for it to stop. If the session that owned it is dead, re-run with PV_CONFIRM_CLEAR=yes." >&2
+          rc=2
+        else
+          echo "kept $mid (still open; clear it by id with PV_CONFIRM_CLEAR=yes if its session is dead)"
+        fi
+        return 0
+      fi
+      rm -f "$m"; cleared=$((cleared + 1)); echo "cleared $mid ($st)"
+    }
+    if [ -n "$id" ]; then
+      m=$(pv_marker_path "$d" "$id")
+      [ -f "$m" ] || { echo "no open-builder marker for $id in $plan"; exit 0; }
+      clear_one "$m" strict
+    else
+      for m in "$d"/open/*.json; do [ -f "$m" ] || continue; clear_one "$m" keep; done
+      [ "$cleared" -gt 0 ] || echo "no stopped builders to clear in $plan"
+    fi
+    exit $rc ;;
 
   post)
     # PostToolUse hook on Agent. For a builder this fires at SPAWN time: Claude Code's
     # Agent tool is asynchronous, so this hook runs before the builder has done anything.
     # A results file only speaks for THIS spawn once it postdates it; agent-guard.sh's
-    # open-builder.json marker (written at spawn, with the same milestone id) is the only
+    # marker for this milestone (run/open/<id>.json, written at spawn) is the only
     # record of when that was. Older or missing results are the previous run's, or none,
     # and the line has to say so instead of handing the orchestrator a stale verdict.
     input=$(cat)
@@ -131,12 +171,10 @@ case "$cmd" in
     safe=$(printf '%s' "$mid" | tr ':/' '__')
     res="$dir/results/$safe.json"
     rundir=$(pv_run_dir "$ROOT" "$plan")
-    marker="$rundir/open-builder.json"
+    marker=$(pv_marker_path "$rundir" "$mid")
 
     spawn_epoch=""
-    if [ -f "$marker" ] && [ "$(jq -r '.id // ""' "$marker" 2>/dev/null)" = "$mid" ]; then
-      spawn_epoch=$(jq -r '.epoch // ""' "$marker" 2>/dev/null)
-    fi
+    [ -f "$marker" ] && spawn_epoch=$(jq -r '.epoch // ""' "$marker" 2>/dev/null)
     if [ -n "$spawn_epoch" ]; then
       post_spawn=0
       if [ -f "$res" ]; then
@@ -223,6 +261,32 @@ EOF
     done
     [ -z "$missing" ] && say ok "every milestone has checks" || say FAIL "milestones with no checks:$missing"
     pv_run_dir "$ROOT" "$plan" >/dev/null && say ok "run directory ready" || say FAIL "cannot create the run directory"
+
+    # Parallel groups: the guard lets the members of one group write this tree at the same
+    # time, so a group that is not really a group is how two builders collide. A member
+    # needs company, a phase in common (a group runs inside one phase) and its own scope.
+    # Only printed when the plan uses a group at all; most plans never do.
+    groups=""
+    for id in $(grep -oE '^### Milestone [A-Za-z0-9._:-]+' "$dir/plan.md" | awk '{print $3}'); do
+      g=$(pv_parallel_group "$dir/plan.md" "$id")
+      [ -n "$g" ] || continue
+      sc=yes; [ -n "$(pv_milestone_field "$dir/plan.md" "$id" scope)" ] || sc=no
+      groups="$groups$g $id ${id%%.*} $sc
+"
+    done
+    if [ -n "$groups" ]; then
+      bad=$(printf '%s' "$groups" | awk '
+        { n[$1]++; members[$1] = members[$1] " " $2
+          if (first[$1] == "") first[$1] = $3; else if ($3 != first[$1]) cross[$1] = 1
+          if ($4 == "no") noscope[$1] = noscope[$1] " " $2 }
+        END { for (g in n) {
+                if (n[g] < 2)         printf "group %s has only one member (%s)\n", g, members[g]
+                if (cross[g])         printf "group %s spans phases:%s\n", g, members[g]
+                if (noscope[g] != "") printf "group %s has members with no scope:%s\n", g, noscope[g]
+        } }' | LC_ALL=C sort | tr '\n' ';' | sed 's/;/; /g')
+      [ -z "$bad" ] && say ok "parallel groups well-formed" \
+        || say FAIL "parallel groups malformed: ${bad%%; }A group is two or more milestones in one phase, each with its own scope, edited at the same time by the guard's permission."
+    fi
 
     want=$(grep -oE '^mode:[[:space:]]*[a-z]+' "$dir/plan.md" | head -1 | awk '{print $2}')
     [ -n "$want" ] || want=supervised

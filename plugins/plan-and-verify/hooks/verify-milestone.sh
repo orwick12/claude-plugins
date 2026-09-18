@@ -58,7 +58,14 @@ fi
 # Every exit path below leaves a heartbeat. An unattended orchestrator cannot otherwise
 # tell "the hook ran and was happy" from "the hook never ran at all".
 agent_id=$(jq -r '.agent_id // ""' <<<"$input")
-rm -f "$(pv_run_dir "$ROOT" "$plan" 2>/dev/null)/open-builder.json" 2>/dev/null || true
+# The builder is no longer writing, so its marker says "stopped" — but it stays. Stopping
+# is not finishing: the orchestrator resumes a stopped builder, and until the milestone is
+# accepted this tree is still mid-milestone. Only accept-milestone.sh retires a marker (F46).
+rd=$(pv_run_dir "$ROOT" "$plan" 2>/dev/null) && mk=$(pv_marker_path "$rd" "$mid") && [ -f "$mk" ] && {
+  jq --arg a "$agent_id" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '. + {state:"stopped",stopped_at:$ts} | if (.agent_id // "") == "" then .agent_id = $a else . end' \
+    "$mk" > "$mk.tmp" 2>/dev/null && mv "$mk.tmp" "$mk" || rm -f "$mk.tmp"
+}
 beat() {
   pv_log_event "$ROOT" "$plan" hook-events "$(jq -nc --arg id "$mid" --arg a "$agent_id" \
     --arg o "$1" --arg d "${2:-}" '{actor:"hook:verify-milestone",id:$id,agent:$a,outcome:$o,detail:$d}')"

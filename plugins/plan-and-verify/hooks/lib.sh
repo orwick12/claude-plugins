@@ -164,3 +164,29 @@ pv_tree_sha() {
       while IFS= read -r f; do printf '%s\n' "$f"; cat "$root/$f" 2>/dev/null; done
   ) | pv_sha256
 }
+
+# One field of one milestone block in plan.md: <plan.md> <id> <field>. The block ends at the
+# next "### Milestone" or any "## " heading, so a field never leaks in from the next phase.
+pv_milestone_field() {
+  [ -f "${1:-}" ] || return 0
+  awk -v id="$2" -v f="$3:" '
+    $0 == "### Milestone " id {inb=1; next}
+    inb && /^### Milestone / {exit}
+    inb && /^## / {exit}
+    inb && index($0, f) == 1 {sub(/^[^:]*:[[:space:]]*/, ""); print; exit}' "$1"
+}
+
+# The parallel-group of a milestone, empty when it has none: <plan.md> <id>. The template
+# writes the value with a trailing comment, so only the first word counts, and "none" (the
+# default) is not a group. Two milestones share a group only when both print the same value.
+pv_parallel_group() {
+  local g
+  g=$(pv_milestone_field "$1" "$2" parallel-group | awk '{print $1}')
+  case "$g" in none|None|NONE) g="" ;; esac
+  printf '%s' "$g"
+}
+
+# Where a builder milestone's open marker lives: <run dir> <id>. One file per milestone,
+# because a parallel group has more than one builder open at a time (F44), and it outlives
+# the builder's stop so a resumed builder is still visible to the guard (F46).
+pv_marker_path() { printf '%s/open/%s.json' "$1" "$(printf '%s' "$2" | tr ':/' '__')"; }

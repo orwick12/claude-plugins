@@ -19,6 +19,7 @@ HOOKS="$(cd "$(dirname "$0")" && pwd)"
 ROOT=$(pv_root)
 PLAN="${1:-}"; shift || true
 [ -n "$PLAN" ] && [ $# -ge 1 ] || { echo "usage: accept-milestone.sh <plan> <id> [<id>...]" >&2; exit 3; }
+NIDS=$#
 DIR="$ROOT/.claude/build-plans/$PLAN"; CHECKS="$DIR/checks.json"; PLANMD="$DIR/plan.md"
 command -v jq >/dev/null || { echo "jq required" >&2; exit 3; }
 [ -f "$CHECKS" ] && [ -f "$PLANMD" ] || { echo "missing plan.md or checks.json in $DIR" >&2; exit 3; }
@@ -57,7 +58,12 @@ for id in "$@"; do
   st=$(jq -r .status "$r")
   [ "$st" = "PASS" ] || refuse "$id result is $st, not PASS"
   [ "$(jq -r .checks_sha "$r")" = "$checks_sha" ] || refuse "$id result was produced against a different checks.json; re-run the checks"
-  [ "$(jq -r .tree_sha "$r")" = "$tree_sha" ] || refuse "$id result is stale: the working tree changed after the checks ran; re-run bash \"$HOOKS\"/run-checks.sh $PLAN $id"
+  # More than one id is a parallel group: its members edit the tree while each other's
+  # checks run, so the first to finish always goes stale. Only a re-run after the LAST
+  # member finished speaks for the tree this commit would carry.
+  group_hint=""
+  [ $NIDS -gt 1 ] && group_hint=" For a parallel group, re-run every member's checks after the last member finishes, then accept the group in one call."
+  [ "$(jq -r .tree_sha "$r")" = "$tree_sha" ] || refuse "$id result is stale: the working tree changed after the checks ran; re-run bash \"$HOOKS\"/run-checks.sh $PLAN $id.$group_hint"
 done
 
 # 3. the branch must still be where this milestone was spawned from. The spawn snapshot's
@@ -93,6 +99,10 @@ git add -A -- . ':!.claude/build-plans'   # the project's work
 git add -A -- ".claude/build-plans/$PLAN" # and this plan's own files, never another's
 git commit -q -m "milestone($ids): ${goal:-accepted} [$PLAN $ids]" -m "checks: $(for id in "$@"; do r="$DIR/results/$(printf '%s' "$id" | tr ':/' '__').json"; printf '%s pass=%s fail=%s run=%s; ' "$id" "$(jq -r .pass "$r")" "$(jq -r .fail "$r")" "$(jq -r .run_id "$r")"; done)" || refuse "git commit failed"
 sha=$(git rev-parse --short HEAD)
+# The milestone is finished, so its open marker is retired here and nowhere else: a stop
+# only pauses a builder, and the guard has to keep denying the next one until this commit
+# exists (F46). A group is accepted in one call, so every id in it clears at once.
+for id in "$@"; do rm -f "$DIR/run/open/$(printf '%s' "$id" | tr ':/' '__').json"; done
 pv_log_event "$ROOT" "$PLAN" hook-events \
   "$(jq -nc --arg id "$ids" --arg sha "$sha" '{actor:"hook:accept-milestone",id:$id,outcome:"accepted",detail:$sha}')"
 echo "ACCEPTED $PLAN [$ids] -> $sha"
