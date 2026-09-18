@@ -118,4 +118,38 @@ rm -f "$REPORT"
 out=$(stop_as four "$B" "$REPORT_DONE" "$T/empty.jsonl" false)
 assert_contains "F36 report from the last message is captured too" "MILESTONE: demo/1.1" "$(cat "$REPORT" 2>/dev/null)"
 
+# --- F42: a BLOCKED report must keep the previous run's evidence ----------------------
+# The orchestrator adjudicates the failing checks after a builder gives up, so replacing
+# the results file with an empty stub destroys exactly what it needs next. BLOCKED still
+# has to overwrite an earlier PASS, so it can never authorise acceptance.
+RES="$REPO/.claude/build-plans/demo/results/1.1.json"
+printf 'wrong' > "$REPO/hello.txt"
+(cd "$REPO" && CLAUDE_PROJECT_DIR="$REPO" bash "$HOOKS/run-checks.sh" demo 1.1 >/dev/null 2>&1)
+assert_eq "F42 precondition: a FAIL results file with one check" FAIL "$(jq -r .status "$RES")"
+tree_before=$(jq -r .tree_sha "$RES")
+out=$(stop "$B" $'MILESTONE: demo/1.1\nChanged: none\nOpen questions: the check disagrees with the plan\nSTATUS: BLOCKED' "$T/empty.jsonl" false)
+assert_empty    "F42 BLOCKED after a failed run: builder may stop" "$out"
+assert_eq       "F42 status is BLOCKED"           BLOCKED "$(jq -r .status "$RES")"
+assert_eq       "F42 the status it replaced is recorded" FAIL "$(jq -r .previous_status "$RES")"
+assert_eq       "F42 the failing check survives"  1 "$(jq -r '.checks | length' "$RES")"
+assert_eq       "F42 the fail count survives"     1 "$(jq -r .fail "$RES")"
+assert_eq       "F42 the tree fingerprint survives" "$tree_before" "$(jq -r .tree_sha "$RES")"
+assert_contains "F42 blocked_at is stamped"       "Z" "$(jq -r .blocked_at "$RES")"
+
+acc=$(cd "$REPO" && CLAUDE_PROJECT_DIR="$REPO" bash "$HOOKS/accept-milestone.sh" demo 1.1 2>&1); acc_code=$?
+assert_eq       "F42 acceptance still refuses a BLOCKED milestone" 2 "$acc_code"
+assert_contains "F42 the refusal names the status" "BLOCKED" "$acc"
+
+# no earlier results file: the stub is still written, and it still says BLOCKED
+R2=$(mk_repo demo)
+R2RES="$R2/.claude/build-plans/demo/results/1.1.json"
+out=$(jq -n --arg cwd "$R2" \
+  '{hook_event_name:"SubagentStop",agent_type:"plan-and-verify:builder-sonnet",agent_id:"afresh",cwd:$cwd,
+    stop_hook_active:false,last_assistant_message:"MILESTONE: demo/1.1\nSTATUS: BLOCKED",agent_transcript_path:""}' |
+  CLAUDE_PROJECT_DIR="$R2" bash "$HOOKS/verify-milestone.sh" 2>/dev/null)
+assert_empty    "F42 BLOCKED with no earlier run: builder may stop" "$out"
+assert_eq       "F42 BLOCKED with no earlier run: stub says BLOCKED" BLOCKED "$(jq -r .status "$R2RES")"
+assert_eq       "F42 BLOCKED with no earlier run: no checks claimed" 0 "$(jq -r '.checks | length' "$R2RES")"
+assert_contains "F42 BLOCKED with no earlier run: blocked_at is stamped" "Z" "$(jq -r .blocked_at "$R2RES")"
+
 finish
