@@ -51,7 +51,7 @@ assert_contains     "the denial names the open builder" "1.1" "$(reason "$out")"
 assert_contains     "the denial says to wait for it"    "Wait" "$(reason "$out")"
 assert_not_contains "the denial does not offer to clear a live builder" "clear-open" "$(reason "$out")"
 out=$(spawn plan-and-verify:builder-opus "$PROMPT")
-assert_eq "re-spawning the same milestone is allowed (escalation)" allow "$(decision "$out")"
+assert_eq "re-spawning a live milestone is refused (one writer)" deny "$(decision "$out")"
 
 # A stopped builder is not a finished milestone: until it is accepted, the tree is still
 # mid-milestone and the next builder waits.

@@ -28,7 +28,7 @@ mk_repo() {
   git -C "$d" config user.name test && git -C "$d" config user.email test@example.com
   git -C "$d" commit -q --allow-empty -m init
   mkdir -p "$d/.claude/build-plans/$slug"
-  printf '# Plan: %s\n\n### Milestone 1.1\ngoal: Write hello.txt containing ok.\nstatus: TODO\n' "$slug" \
+  printf '# Plan: %s\nmode: supervised\n\n### Milestone 1.1\nreview: 0\nirreversible: no\ndepends-on: none\ngoal: Write hello.txt containing ok.\nstatus: TODO\n' "$slug" \
     > "$d/.claude/build-plans/$slug/plan.md"
   cat > "$d/.claude/build-plans/$slug/checks.json" <<'EOF'
 {
