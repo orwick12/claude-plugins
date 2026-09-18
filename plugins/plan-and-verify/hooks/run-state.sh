@@ -63,6 +63,7 @@ case "$cmd" in
     awk -v id="$id" '
       $0 == "### Milestone " id {f=1; print; next}
       f && /^### Milestone / {exit}
+      f && /^## / {exit}
       f {print}' "$P" ;;
 
   brief)
