@@ -21,6 +21,14 @@ pv_is_builder() {
   return 1
 }
 
+# True when an agent_type names this plugin's reviewer. Same namespacing as pv_is_builder.
+pv_is_reviewer() {
+  case "${1:-}" in
+    milestone-reviewer|*:milestone-reviewer) return 0 ;;
+  esac
+  return 1
+}
+
 # Print the git subcommand of every git invocation in a command string, one per line.
 # A regex over the raw text misses the spellings that still reach git: leading
 # whitespace, "VAR=val git ...", "env VAR=val git ...", and git's own global options
@@ -97,16 +105,30 @@ pv_timeout() {
 PV_REF_RE='^MILESTONE:[[:space:]]*[A-Za-z0-9._-]+/[A-Za-z0-9._:-]+'
 pv_report_ref() { grep -oE "$PV_REF_RE" <<<"${1:-}" | head -1 | sed -E 's/^MILESTONE:[[:space:]]*//'; }
 
-# Keep a builder's report next to its results: <root> <plan> <id> <source> <agent id> <report>.
-# SubagentHandback delivers one report per run, so a builder sent back by the finish hook
-# cannot deliver its corrected one; disk is where the orchestrator reads it instead. Never
+# The last report in an agent transcript that carries a MILESTONE line. A background agent
+# hands its report back with a SubagentHandback tool call before it stops, so by then
+# last_assistant_message is only "report delivered" and the report is in the transcript.
+# Prints nothing when there is no transcript, or nothing in it that looks like a report.
+pv_transcript_report() {
+  [ -n "${1:-}" ] && [ -f "$1" ] || return 0
+  jq -R -r -n '[inputs | fromjson? | select(.type == "assistant") | .message.content[]?
+      | if .type == "tool_use" and .name == "SubagentHandback" then (.input.message // "")
+        elif .type == "text" then (.text // "") else empty end
+      | select(test("(^|\n)MILESTONE:[ \t]*[A-Za-z0-9._-]+/[A-Za-z0-9._:-]+"))] | last // ""' "$1" 2>/dev/null
+}
+
+# Keep an agent's report next to its results:
+#   <root> <plan> <id> <source> <agent id> <report> [suffix, default report.md]
+# SubagentHandback delivers one report per run, so an agent sent back by a stop hook
+# cannot deliver its corrected one; disk is where the orchestrator reads it instead. The
+# suffix is how the reviewer's notes land beside the builder's report (review.md). Never
 # creates a directory for a plan this project does not have.
 pv_write_report() {
-  local root="$1" plan="$2" mid="$3" src="$4" agent="$5" msg="$6" d f
+  local root="$1" plan="$2" mid="$3" src="$4" agent="$5" msg="$6" suffix="${7:-report.md}" d f
   d="$root/.claude/build-plans/$plan"
   [ -f "$d/checks.json" ] || return 0
   mkdir -p "$d/results" || return 0
-  f="$d/results/$(printf '%s' "$mid" | tr ':/' '__').report.md"
+  f="$d/results/$(printf '%s' "$mid" | tr ':/' '__').$suffix"
   { printf -- '---\nsource: %s\nagent: %s\nat: %s\n---\n\n' \
       "$src" "${agent:-unknown}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf '%s\n' "$msg"

@@ -41,10 +41,7 @@ src="last assistant message"
 if ! grep -qE "$REF_RE" <<<"$msg"; then
   tp=$(jq -r '.agent_transcript_path // ""' <<<"$input")
   if [ -n "$tp" ] && [ -f "$tp" ]; then
-    msg=$(jq -R -r -n '[inputs | fromjson? | select(.type == "assistant") | .message.content[]?
-        | if .type == "tool_use" and .name == "SubagentHandback" then (.input.message // "")
-          elif .type == "text" then (.text // "") else empty end
-        | select(test("(^|\n)MILESTONE:[ \t]*[A-Za-z0-9._-]+/[A-Za-z0-9._:-]+"))] | last // ""' "$tp" 2>/dev/null)
+    msg=$(pv_transcript_report "$tp")
     src="handback or text in the agent transcript"
   fi
 fi
@@ -72,11 +69,20 @@ beat() {
 pv_write_report "$ROOT" "$plan" "$mid" "$src" "$agent_id" "$msg"
 
 # Honest "I am stuck" lets the builder stop, but a BLOCKED result must
-# overwrite any earlier PASS so it can never authorise acceptance.
+# overwrite any earlier PASS so it can never authorise acceptance. It must not overwrite
+# the evidence: the last run's failing checks are what the orchestrator adjudicates next,
+# and a stub of zero checks told it the builder gave up for no recorded reason (F42).
 if grep -qE '^STATUS:[[:space:]]*BLOCKED' <<<"$msg"; then
   d="$ROOT/.claude/build-plans/$plan/results"; mkdir -p "$d"
-  jq -n --arg plan "$plan" --arg id "$mid" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '{plan:$plan,id:$id,status:"BLOCKED",ran_at:$ts,pass:0,fail:0,checks:[]}' > "$d/$(printf '%s' "$mid" | tr ':/' '__').json"
+  f="$d/$(printf '%s' "$mid" | tr ':/' '__').json"
+  ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  if [ -f "$f" ] && jq -e . "$f" >/dev/null 2>&1; then
+    jq --arg ts "$ts" '. + {previous_status:(.status // "none"), status:"BLOCKED", blocked_at:$ts}' "$f" \
+      > "$f.tmp" && mv "$f.tmp" "$f" || rm -f "$f.tmp"
+  else
+    jq -n --arg plan "$plan" --arg id "$mid" --arg ts "$ts" \
+      '{plan:$plan,id:$id,status:"BLOCKED",ran_at:$ts,blocked_at:$ts,pass:0,fail:0,checks:[]}' > "$f"
+  fi
   beat blocked-by-builder "builder reported STATUS: BLOCKED"
   exit 0
 fi

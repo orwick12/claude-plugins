@@ -12,6 +12,7 @@ An autonomous run does the same work as a supervised one and reaches the same ga
 | Did the checks pass? | `results/<id>.json`, and only while its `tree_sha` still matches the tree | the builder's pasted check output |
 | Did enforcement run? | a `hook:verify-milestone` line in `run/hook-events.jsonl` | the absence of a complaint |
 | What did the builder report? | `results/<id>.report.md`, written by the hook | the hand-back message, which is stale after any block |
+| What did the reviewer find? | `results/<id>.review.md`, written by the hook | the verdict token on its own |
 | What happened earlier in this run? | `run/decisions.jsonl` via `run-state.sh brief <slug>` | your own memory of it |
 
 The `pv:` line is injected at spawn (Claude Code's Agent tool is asynchronous, so PostToolUse[Agent] fires before the builder has done anything). It is spawn-time and carries no verdict; it says so and names the files to check. The truth is `results/<id>.json`, read AFTER the builder's completion notification, plus the `hook:verify-milestone` heartbeat for that stop.
@@ -23,7 +24,7 @@ The `pv:` line is injected at spawn (Claude Code's Agent tool is asynchronous, s
 3. `needs-planning: yes` → the planning fork first, then commit its sub-plan as `plan(<slug>): sub-plan for <id>`.
 4. `snapshot.sh <slug> <id> spawn`, then spawn exactly one builder with the work order.
 5. When it returns, read the results file. `PASS` → review tier decides; `FAIL`/`BLOCKED`/missing → classify below.
-6. Tier 1, or tier 2 with `irreversible: no` → reviewer; `Verdict:` is the only line that decides. Tier 2 with `irreversible: yes` → stop and show the user (class c).
+6. Tier 1, or tier 2 with `irreversible: no` → reviewer; `Verdict:` is the only line that decides: `ACCEPT` and `ACCEPT-WITH-NOTES` go on to step 7, `REJECT` does not. Read its findings in `results/<id>.review.md` and keep every note for the end report. Tier 2 with `irreversible: yes` → stop and show the user (class c).
 7. `accept-milestone.sh <slug> <id>`. On refusal, do what the message says once; a second refusal of the same kind is class (e).
 8. Log every decision as you make it: `run-state.sh log <slug> '<json>'`.
 
@@ -47,6 +48,7 @@ One `$PV_HOOKS` call per Bash invocation. Do not chain them with `&&`: an allow-
 | `hooks.lock` mismatch, different plugin version | — | Re-lock, commit as `plan(<slug>): re-lock hooks for <version>`, carry on. |
 | A `$PV_HOOKS` call is denied by the permission system | **e** | Stop: the session cannot run its own enforcement. |
 | Builder failed, budget left | — | Resume the same builder with the failures. |
+| Reviewer says ACCEPT-WITH-NOTES | — | Accept. Its notes are all `[low]`; they are in `results/<id>.review.md` and every one of them goes in the end report. |
 | Reviewer says REJECT, budget left | — | Resume the same builder with the findings; second REJECT escalates to `builder-opus`. |
 | The tree is byte-identical before and after a builder run | — | Count it as a failed run immediately and escalate; a builder that changed nothing will not change anything next time either. |
 
@@ -101,4 +103,4 @@ Everything above is rebuilt from the repository: `run-state.sh brief <slug>` plu
 
 ## The end report
 
-When the last gate passes, report: the branch, the commit count, the tags, then — in this order — every check fix with its citation, every self-correction by class, escalations to opus, repair milestones added, re-locks, and budgets consumed. `run-state.sh brief` gives you all of it. Say plainly what was never verified by a human.
+When the last gate passes, report: the branch, the commit count, the tags, then — in this order — every check fix with its citation, every self-correction by class, every ACCEPT-WITH-NOTES note, escalations to opus, repair milestones added, re-locks, and budgets consumed. `run-state.sh brief` gives you all of it. Say plainly what was never verified by a human.
