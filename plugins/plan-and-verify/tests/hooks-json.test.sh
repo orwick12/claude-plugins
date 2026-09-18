@@ -12,6 +12,13 @@ assert_eq "SubagentStop entry has no matcher" false "$(jq '.hooks.SubagentStop[0
 assert_contains "SubagentStop runs verify-milestone.sh" "verify-milestone.sh" "$(jq -r '.hooks.SubagentStop[0].hooks[0].command' "$J")"
 assert_contains "PreToolUse runs guard-builder.sh" "guard-builder.sh" "$(jq -r '.hooks.PreToolUse[0].hooks[0].command' "$J")"
 
+# The reviewer stops through the same event, and its verdict is what an unattended run
+# acts on, so its report is captured and its severity rule enforced there too (F45).
+assert_contains "SubagentStop runs capture-review.sh" "capture-review.sh" \
+  "$(jq -r '.hooks.SubagentStop[].hooks[].command' "$J" | tr '\n' ' ')"
+assert_eq "every SubagentStop entry runs without a matcher" "false false" \
+  "$(jq -r '[.hooks.SubagentStop[] | has("matcher")] | join(" ")' "$J")"
+
 # The hand-back carries the builder's report, and the tool delivers one per run (F36),
 # so the report has to be captured as it is delivered.
 assert_eq       "PostToolUse matches SubagentHandback" "SubagentHandback" "$(jq -r '.hooks.PostToolUse[0].matcher' "$J")"

@@ -44,6 +44,19 @@ for b in builder-sonnet builder-opus; do
   assert_contains "$b is kept out of results files"    "results/"         "$(cat "$P/agents/$b.md")"
 done
 assert_contains "the reviewer puts its verdict last" "must be the last line" "$(cat "$P/agents/milestone-reviewer.md")"
+# F45: the verdict is machine-read and the notes are machine-stored, so the contract has
+# to name the milestone and grade every finding.
+REV="$P/agents/milestone-reviewer.md"
+assert_contains "the reviewer names the milestone the hook parses" "MILESTONE:" "$(cat "$REV")"
+for sev in low med high; do
+  assert_contains "the reviewer grades findings [$sev]" "[$sev]" "$(cat "$REV")"
+done
+assert_contains "the reviewer says a med or high finding is a REJECT" "REJECT" "$(cat "$REV")"
+assert_contains "the reviewer says where its notes go" "review.md" "$(cat "$REV")"
+for f in "$SKILL" "$REF"; do
+  assert_contains "$(basename "$f") knows ACCEPT-WITH-NOTES" "ACCEPT-WITH-NOTES" "$(cat "$f")"
+  assert_contains "$(basename "$f") says where the notes land" "review.md" "$(cat "$f")"
+done
 
 # --- wiring -----------------------------------------------------------------------------
 J="$HOOKS/hooks.json"
