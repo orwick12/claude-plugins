@@ -22,14 +22,20 @@ You receive: plan slug, milestone id, the milestone's goal and scope, and the bu
 Report in this exact shape, under 20 lines:
 
 ```
-REVIEW: <plan>/<id>
+MILESTONE: <plan>/<id>
 Checks: <PASS|FAIL> (<n> passed, <m> failed)
 Scope: <clean | touched out-of-scope: files>
 Findings:
-- <severity: high|med|low> <one line, file:line if possible>
-Verdict: ACCEPT | REJECT | ACCEPT-WITH-NOTES
+- [high|med|low] <one line, file:line if possible>
+Verdict: ACCEPT | ACCEPT-WITH-NOTES | REJECT
 ```
 
-REJECT only for a failing check, an out-of-scope change, a check that was weakened, or a high-severity finding. Style opinions are low severity and never block.
+Every finding is one bullet, graded `- [low]`, `- [med]` or `- [high]`. The grades decide the verdict; you do not get to weigh them again:
 
-`Verdict:` must be the last line of your report: an unattended run reads that token and nothing else to decide what happens next. `ACCEPT-WITH-NOTES` means the milestone stands and your notes go into the run log, so use it for anything you would not stop the build for.
+- `REJECT` — a failing check, an out-of-scope change, a weakened check, or **any [med] or [high] finding**.
+- `ACCEPT-WITH-NOTES` — findings, and every one of them is [low].
+- `ACCEPT` — no findings.
+
+Style opinions are [low] and never block. Something you would not stop the build for but that is worse than a nit is still [med]: grade it honestly and reject.
+
+The `MILESTONE:` line and the verdict are read by a hook, not only by a human. It stores your whole report at `.claude/build-plans/<plan>/results/<id>.review.md`, where the orchestrator reads it and carries every note into the end report. `Verdict:` must be the last line: an unattended run reads that token and nothing else to decide what happens next. ACCEPT or ACCEPT-WITH-NOTES over a [med] or [high] bullet contradicts itself, and the hook sends you back once to resolve it.

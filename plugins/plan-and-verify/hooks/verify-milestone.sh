@@ -41,10 +41,7 @@ src="last assistant message"
 if ! grep -qE "$REF_RE" <<<"$msg"; then
   tp=$(jq -r '.agent_transcript_path // ""' <<<"$input")
   if [ -n "$tp" ] && [ -f "$tp" ]; then
-    msg=$(jq -R -r -n '[inputs | fromjson? | select(.type == "assistant") | .message.content[]?
-        | if .type == "tool_use" and .name == "SubagentHandback" then (.input.message // "")
-          elif .type == "text" then (.text // "") else empty end
-        | select(test("(^|\n)MILESTONE:[ \t]*[A-Za-z0-9._-]+/[A-Za-z0-9._:-]+"))] | last // ""' "$tp" 2>/dev/null)
+    msg=$(pv_transcript_report "$tp")
     src="handback or text in the agent transcript"
   fi
 fi

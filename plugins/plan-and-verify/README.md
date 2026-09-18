@@ -86,7 +86,8 @@ An allow rule matches each `&&`/`;`/`|` subcommand separately, which is why the 
 | Results file | written by the runner, stamped with fingerprints of the tree and `checks.json` |
 | Acceptance script | refuses unless the result is PASS against exactly the tree and checks on disk now, `checks.json`/`hooks.lock` match `HEAD` and were changed only by `plan(<slug>): ...` commits, `HEAD` is still where the milestone was spawned from, and nothing from another plan is waiting to be committed; then makes the one milestone commit, staging this plan's files and the project's work only |
 | Heartbeats | every enforcement hook records what it did in `run/hook-events.jsonl`, so a run can tell "the hook passed it" from "the hook never ran" — the failure that made 1.1.0 look healthy while nothing was enforced |
-| Reviewer | fresh context; diffs against the spawn snapshot; rejects on weakened tests, out-of-scope files, or `checks.json` in the diff |
+| Reviewer | fresh context; diffs against the spawn snapshot; rejects on weakened tests, out-of-scope files, or `checks.json` in the diff; grades every finding `[low]`/`[med]`/`[high]` |
+| Review hook | stores each review at `results/<id>.review.md` so its notes outlive the hand-back, logs the verdict, and enforces the severity rule: `ACCEPT` and `ACCEPT-WITH-NOTES` are for reports whose findings are all `[low]`, so a verdict that waves a `[med]` or `[high]` finding through is sent back once as a REJECT |
 | Snapshots | whole-tree recovery points at spawn, per file batch, per finish attempt; never on the branch |
 
 ## Where it still falls down
