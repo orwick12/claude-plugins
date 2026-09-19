@@ -56,6 +56,10 @@ out=$(rs milestone demo 2.1)
 assert_contains "the next phase's milestone prints intact" "Write next.txt"              "$out"
 assert_contains "the next phase's milestone keeps its context" "exactly next"            "$out"
 
+# Commit the plan amendment before acceptance (approved fixture correction).
+git -C "$REPO" add "$DIR/plan.md"
+git -C "$REPO" commit -q -m "plan(demo): add next phase"
+
 # --- brief before anything is built ---------------------------------------------------
 out=$(rs brief demo)
 assert_contains "brief names the plan"                 "demo"       "$out"
