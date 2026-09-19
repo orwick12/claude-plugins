@@ -3,7 +3,9 @@
 The current plugin is `plugins/plan-and-verify`. Read its README and skill contract before
 changing workflow behavior. The implementation plan is maintained in
 `../plantest/docs/plans/2026-09-18-verified-orchestration.md`; that sibling project also owns
-live evaluation evidence and benchmarks.
+live evaluation evidence and benchmarks. `docs/1.4-simplify-rationale.md` records why the
+1.4 review binding, gate evidence and runner guard were changed after that plan, what each
+change gives up, and open questions. Read it before changing those areas.
 
 `make help` lists commands; `make check` is the gate (Bash syntax, JSON, all script tests).
 Scripts support stock macOS Bash 3.2 plus Git and jq. Tests use temporary Git repositories
