@@ -111,13 +111,13 @@ for m in "$ROOT"/.claude/build-plans/*/run/open/*.json; do
   oid=$(jq -r '.id // ""' "$m" 2>/dev/null)
   [ -n "$oid" ] || continue
   rel=${m#"$ROOT"/.claude/build-plans/}; otherplan=${rel%%/*}
-  if [ "$otherplan" = "$plan" ] && [ "$oid" = "$mid" ]; then
-    [ "$(jq -r '.state // "open"' "$m")" = stopped ] && continue
-    deny "A builder is still open on milestone $mid. Wait for completion before escalating."
-  fi
   oat=$(jq -r '.epoch // 0' "$m" 2>/dev/null)
   case "$oat" in ''|*[!0-9]*) oat=0 ;; esac
   [ $((now - oat)) -lt 21600 ] || continue               # six hours: a dead session's marker
+  if [ "$otherplan" = "$plan" ] && [ "$oid" = "$mid" ]; then
+    [ "$(jq -r '.state // "open"' "$m")" = stopped ] && continue
+    deny "A builder is still open on milestone $mid. Wait for completion before escalating. If no builder is running (the session that spawned it died), clear its marker with: bash \"$HOOKS/run-state.sh\" clear-open $plan $mid"
+  fi
   # Members of one parallel group are the one case where two builders share the tree: the
   # plan says they own disjoint directories, and the group is accepted in one call.
   if [ "$otherplan" = "$plan" ] && [ -n "$mygroup" ] && [ "$mygroup" = "$(pv_parallel_group "$PLANMD" "$oid")" ]; then continue; fi

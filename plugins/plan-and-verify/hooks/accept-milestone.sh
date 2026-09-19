@@ -9,7 +9,8 @@
 #     changed them after they were added is a "plan(<plan>): ..." commit, and the
 #     installed scripts hash to what hooks.lock says (the plugin lives outside the
 #     repo, so the committed lock is how git vouches for it)
-# Required review, approval, dependency and prior-phase evidence must also hold.
+# Required review, approval and dependencies must also hold, and every earlier phase's
+# gate must have a PASS for its own current checks.
 # Then sets the milestone's status line in plan.md to DONE, commits the
 # working tree as one milestone commit tagged "[<plan> <ids>]" in the subject,
 # and prints one line. Query completion with: run-state.sh accepted <plan> <id>
@@ -117,19 +118,12 @@ for id in "$@"; do
   fi
   phase=${id%%.*}
   case "$phase" in ''|*[!0-9]*) refuse "$id has no numeric phase" ;; esac
+  # Every earlier declared gate must have passed its own current checks. run-checks.sh only
+  # runs a gate on a clean tree, so a PASS is evidence about committed work.
   for gate in $(jq -r --argjson p "$phase" '.gates // {} | keys[] | select(test("^[0-9]+$")) | select(tonumber < $p)' "$CHECKS"); do
-    gatefile="$DIR/results/gate_$gate.json"
-    jq -e --arg c "$checks_sha" --arg p "$PLAN" --arg i "gate:$gate" '.plan == $p and .id == $i and .status == "PASS" and .checks_sha == $c and (.base_commit | type == "string" and length > 0)' "$gatefile" >/dev/null 2>&1 || refuse "phase $gate gate has no passing evidence for these checks"
-    gatebase=$(jq -r .base_commit "$gatefile")
-    git merge-base --is-ancestor "$gatebase" HEAD 2>/dev/null || refuse "phase $gate gate belongs to another history"
-    expected_gate_sha=$(pv_committed_sha "$ROOT" "$gatebase") || refuse "phase $gate gate revision cannot be inspected"
-    [ "$(jq -r .tree_sha "$gatefile")" = "$expected_gate_sha" ] || refuse "phase $gate gate was not run against its clean accepted revision"
-    # A gate is run on an accepted phase, not on an uncommitted proposed milestone.
-    for prior in $(grep -oE '^### Milestone [A-Za-z0-9._:-]+' "$PLANMD" | awk '{print $3}'); do
-      [ "${prior%%.*}" = "$gate" ] || continue
-      accepted=$(pv_accepted "$ROOT" "$PLAN" "$prior") || refuse "phase $gate still has unaccepted milestone $prior"
-      git merge-base --is-ancestor "${accepted%% *}" "$gatebase" 2>/dev/null || refuse "phase $gate gate predates acceptance of $prior"
-    done
+    jq -e --arg p "$PLAN" --arg i "gate:$gate" --arg e "$(pv_entry_sha "$CHECKS" "gate:$gate")" \
+      '.plan == $p and .id == $i and .status == "PASS" and .entry_sha == $e' "$DIR/results/gate_$gate.json" >/dev/null 2>&1 ||
+      refuse "phase $gate gate has no passing result for its current checks; run bash \"$HOOKS/run-checks.sh\" $PLAN gate:$gate on a clean tree"
   done
 done
 

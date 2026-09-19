@@ -6,8 +6,8 @@
 # writes machine-readable results to .claude/build-plans/<plan>/results/.
 #
 # Exit codes: 0 all checks passed, 1 at least one failed, 3 could not run
-# (missing plan, missing jq, no checks defined). Exit 3 is deliberately
-# distinct so the hook can tell "config problem" from "code problem".
+# (missing plan, missing jq, no checks defined, a gate on an uncommitted tree).
+# Exit 3 is deliberately distinct so the hook can tell "config problem" from "code problem".
 #
 # checks.json shape:
 # {
@@ -57,8 +57,18 @@ fi
 SAFE_ID=$(printf '%s' "$MID" | tr ':/' '__')
 OUT="$DIR/results/$SAFE_ID.json"
 case "${3:-}" in '') ;; --observe) OUT="$DIR/results/$SAFE_ID.observed.json" ;; *) echo 'unknown runner option' >&2; exit 3 ;; esac
-before_tree=$(pv_tree_sha "$ROOT") || exit 3
+before_src=$(pv_source_tree "$ROOT") || exit 3
+before_tree=$(pv_tree_sha "$ROOT" "$before_src") || exit 3
 before_checks=$(pv_sha256 < "$CHECKS") || exit 3
+# A gate vouches for an accepted phase, so it only runs on a tree with nothing uncommitted.
+case "$MID" in gate:*)
+  head_src=$(pv_source_tree "$ROOT" HEAD) || exit 3
+  if [ "$before_src" != "$head_src" ]; then
+    dirty=$(git -C "$ROOT" diff-tree -r --name-only "$head_src" "$before_src" | head -5 | paste -sd ' ' -)
+    echo "refusing to run $MID: the tree has uncommitted changes: $dirty. A gate runs after the phase's last milestone is accepted, on a clean tree." >&2
+    exit 3
+  fi ;;
+esac
 ROWS=$(mktemp)
 pass=0; fail=0
 
@@ -105,22 +115,29 @@ i=0; while [ "$i" -lt "$COUNT" ]; do
   i=$((i+1))
 done
 
-after_tree=$(pv_tree_sha "$ROOT") || exit 3
+after_src=$(pv_source_tree "$ROOT") || exit 3
+after_tree=$(pv_tree_sha "$ROOT" "$after_src") || exit 3
 after_checks=$(pv_sha256 < "$CHECKS") || exit 3
 if [ "$before_tree" != "$after_tree" ] || [ "$before_checks" != "$after_checks" ]; then
+  # Name what changed. Unnamed, this reads as flaky: a rerun passes once a generated file
+  # exists, and that file is then committed with the milestone.
+  changed=$(git -C "$ROOT" diff-tree -r --name-only "$before_src" "$after_src" | head -5 | paste -sd ' ' -)
+  [ "$before_checks" = "$after_checks" ] || changed="${changed:+$changed }${CHECKS#$ROOT/}"
+  why="the check run changed: ${changed:-HEAD (a commit during the run)}. A check must not create or modify non-ignored files; gitignore them (a plan change) or write them to a temp dir. A rerun can pass once the file exists, but the file would then be committed with the milestone."
   fail=$((fail+1))
-  echo 'FAIL  code or checks changed during verification; rerun after stabilizing the tree'
-  jq -nc '{name:"stable verification input",ok:false,exit:1,output_tail:"code or checks changed during verification"}' >> "$ROWS"
+  echo "FAIL  stable verification input: $why"
+  jq -nc --arg why "$why" '{name:"stable verification input",ok:false,exit:1,output_tail:$why}' >> "$ROWS"
 fi
 status=$([ "$fail" -eq 0 ] && echo PASS || echo FAIL)
 # State fingerprints so a result can only authorise the exact code and checks it tested.
+# entry_sha is this id's own checks; a gate's evidence is bound to that alone.
 checks_sha=$before_checks
 tree_sha=$before_tree
 jq -s --arg plan "$PLAN" --arg id "$MID" --arg status "$status" \
       --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg sha "$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo none)" \
       --arg base "$(git -C "$ROOT" rev-parse HEAD)" --arg run "$(date +%s)-$$" --arg csha "$checks_sha" --arg tsha "$tree_sha" \
-      --argjson pass "$pass" --argjson fail "$fail" \
-      '{schema_version:1,plan:$plan,id:$id,status:$status,run_id:$run,ran_at:$ts,git:$sha,base_commit:$base,tree_sha:$tsha,checks_sha:$csha,pass:$pass,fail:$fail,checks:.}' "$ROWS" > "$OUT"
+      --arg esha "$(pv_entry_sha "$CHECKS" "$MID")" --argjson pass "$pass" --argjson fail "$fail" \
+      '{schema_version:1,plan:$plan,id:$id,status:$status,run_id:$run,ran_at:$ts,git:$sha,base_commit:$base,tree_sha:$tsha,checks_sha:$csha,entry_sha:$esha,pass:$pass,fail:$fail,checks:.}' "$ROWS" > "$OUT"
 rm -f "$ROWS"
 
 echo "== $status: $pass passed, $fail failed  (results: ${OUT#$ROOT/}) =="

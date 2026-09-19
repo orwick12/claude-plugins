@@ -42,6 +42,8 @@ Results land in `.claude/build-plans/<slug>/results/<id>.json` with `status`, pe
 
 A check is a command plus an expected result that a stranger could run. If you find yourself writing "verify that", "make sure", or "confirm", you have written a wish, not a check. Convert it or mark the milestone `needs-planning: yes`.
 
+A check must not leave non-ignored files behind (coverage reports, build output outside `dist/`/`build/`, logs). The runner fails a run that changes the source tree and names the files; gitignore them in the plan or write them to a temp dir.
+
 ## Two checks minimum, of different kinds
 
 - **Static**: tests, build, typecheck, lint, scoped to the milestone's files so they run fast. Proves the code compiles and the tests the builder wrote pass.

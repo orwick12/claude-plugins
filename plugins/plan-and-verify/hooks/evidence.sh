@@ -1,21 +1,15 @@
 #!/usr/bin/env bash
 # Shared evidence checks; callers supply already validated plan/milestone IDs.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/state.sh"
+# An approving, well-formed review record written by capture-review.sh. Callers compare
+# its tree_sha/checks_sha with the current ones; this only says the record can authorize.
 pv_review_bound() {
-  local root="$1" plan="$2" id="$3" safe start review
+  local root="$1" plan="$2" id="$3" safe
   safe=$(printf '%s' "$id" | tr ':/' '__')
-  start="$root/.claude/build-plans/$plan/run/reviews/$safe.json"
-  review="$root/.claude/build-plans/$plan/results/$safe.review.json"
-  [ -f "$start" ] && [ -f "$review" ] || return 1
-  jq -e -s --arg p "$plan" --arg i "$id" '
-    .[0] as $s | .[1] as $r | $s.schema_version == 1 and $r.schema_version == 1
-    and $s.plan == $p and $r.plan == $p and $s.id == $i and $r.id == $i
-    and ($s.review_id | type == "string" and length > 0)
-    and ($r.agent_id | type == "string" and length > 0)
-    and $s.review_id == $r.review_id and $s.tree_sha == $r.tree_sha
-    and $s.checks_sha == $r.checks_sha and $s.base_commit == $r.base_commit
-    and ($r.verdict == "ACCEPT" or $r.verdict == "ACCEPT-WITH-NOTES")
-    ' "$start" "$review" >/dev/null 2>&1
+  jq -e --arg p "$plan" --arg i "$id" '.schema_version == 1 and .plan == $p and .id == $i
+    and ([.review_id, .agent_id, .tree_sha, .checks_sha, .base_commit] | all(.[]; type == "string" and length > 0))
+    and (.verdict == "ACCEPT" or .verdict == "ACCEPT-WITH-NOTES")' \
+    "$root/.claude/build-plans/$plan/results/$safe.review.json" >/dev/null 2>&1
 }
 
 pv_human_required() {

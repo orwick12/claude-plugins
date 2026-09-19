@@ -12,12 +12,12 @@ release guarantee.
 2. `/plan-and-verify execute <slug>` runs sequential milestones. A narrow read-only
    `milestone-planner` resolves remaining design questions just before their milestones,
    after dependencies finish. Builders receive scoped work orders and cannot delegate.
-3. Checks run independently at builder completion. For review tiers 1/2, the orchestrator
-   pins the proposed artifact with `review-start.sh`, then passes its token to the reviewer.
-4. `accept-milestone.sh` validates check freshness, required bound review, dependencies,
-   preceding declared phase gates and explicit approval where required. It commits the
+3. Checks run independently at builder completion. For review tiers 1/2, a reviewer judges
+   the result; its verdict is bound to the code and checks as they stand when it stops.
+4. `accept-milestone.sh` validates check freshness, required current review, dependencies,
+   a PASS for each earlier phase gate's current checks and explicit approval where required. It commits the
    milestone together with structured acceptance evidence.
-5. Each phase finishes with its gate. No automated push, merge or publication.
+5. Each phase finishes with its gate, run on a clean tree after the phase's last acceptance. No automated push, merge or publication.
 
 Small mechanical work can use tier 0 with strong checks. Use independent review where
 judgment adds value. A task need not be split into tiny agents merely because delegation
@@ -47,14 +47,15 @@ subjects are parsed literally, including group commits. Uncommitted evidence and
 - A code fingerprint includes HEAD and the complete proposed source tree through a
   private Git index. Only plugin plan `results/` and `run/` paths are excluded; application
   directories named `results` remain source. The real staging index is not changed.
-- Checks compare source/check identity before and after running. A mutating check fails;
-  it cannot stamp the code it happened to leave behind as verified.
+- Checks compare source/check identity before and after running. A mutating check fails
+  and names the files it changed; it cannot stamp the code it happened to leave behind as
+  verified. Gitignore generated files or write them to a temp dir.
 - `run-checks.sh <slug> <id> --observe` writes `<id>.observed.json`, preserving the builder's
   primary PASS/FAIL/BLOCKED record. Reviewers and adjudicators use this mode.
-- `review-start.sh <slug> <id>` returns a token before the reviewer starts. Its report must
-  include `REVIEW-ID: <token>`. The hook attaches actual reviewer identity and validates the
-  verdict and artifact. Unknown, contradictory, unbound or stale reviews cannot authorize
-  acceptance. An invalid reviewer may stop after one retry, but its evidence stays INVALID.
+- When a reviewer stops, the hook records its verdict with the reviewer's identity, a
+  review id, and the tree/checks at that moment. It is INVALID unless the builder's checks
+  are a current PASS for that tree. Unknown, contradictory or stale reviews cannot
+  authorize acceptance. An invalid reviewer may stop after one retry, but its evidence stays INVALID.
 - `approve-milestone.sh <slug> <id> --by <name> --reason <approval-reference>` records an
   explicit user's approval of the current review/artifact. Required for supervised tier 2,
   and autonomous tier 2 with `irreversible: yes`. Never infer or fabricate this decision.

@@ -173,19 +173,21 @@ pv_source_tree() (
 )
 
 # A code identity includes the base commit as well as the complete proposed tree.
+# pv_tree_sha ROOT [TREE]: pass a tree pv_source_tree already built to avoid a second one.
 pv_tree_sha() {
   local base tree
   base=$(git -C "$1" rev-parse HEAD) || return 1
-  tree=$(pv_source_tree "$1") || return 1
+  tree=${2:-$(pv_source_tree "$1")} || return 1
+  [ -n "$tree" ] || return 1
   printf '%s\n%s\n' "$base" "$tree" | pv_sha256
 }
 
-# Identity of a clean accepted revision, independent of the current worktree.
-pv_committed_sha() {
-  local base tree
-  base=$(git -C "$1" rev-parse "$2^{commit}") || return 1
-  tree=$(pv_source_tree "$1" "$base") || return 1
-  printf '%s\n%s\n' "$base" "$tree" | pv_sha256
+# pv_entry_sha <checks.json> <id|gate:N>: identity of the checks one milestone or gate runs,
+# plus the defaults they inherit. A gate's evidence is bound to this, not to the whole file,
+# so amending a later milestone's check does not make an earlier phase's gate stale.
+pv_entry_sha() {
+  jq -c --arg id "$2" '{defaults: .defaults,
+    entry: (if ($id | startswith("gate:")) then .gates[$id[5:]] else .milestones[$id] end)}' "$1" | pv_sha256
 }
 
 # Validate CLI identifiers before using them in paths or refs.

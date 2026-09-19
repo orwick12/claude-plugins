@@ -5,7 +5,10 @@
 # diagnostic. Findings used to live only in a hand-back message. This hook keeps the
 # review next to the milestone's results and holds the reviewer to the severity rule in
 # its own contract: a [med] or [high] finding is a REJECT (F45).
-#   - review captured                          -> results/<id>.review.md, verdict logged
+#   - review captured                          -> results/<id>.review.md, verdict logged, and
+#                                                 results/<id>.review.json bound to the tree
+#                                                 and checks at stop (INVALID unless the
+#                                                 builder's checks are a current PASS)
 #   - ACCEPT/ACCEPT-WITH-NOTES with [med]/[high] -> block once, the verdict must change
 #   - no Verdict: line                         -> block once, ask for it
 #   - no MILESTONE: line                       -> block once, ask for the report format
@@ -61,9 +64,6 @@ pv_write_report "$ROOT" "$plan" "$mid" "$src" "$agent_id" "$msg" review.md
 
 # Raw Markdown is diagnostic only. Acceptance consumes the validated JSON below.
 verdict=$(grep -E '^Verdict:' <<<"$msg" | tail -1 | sed -E 's/^Verdict:[[:space:]]*//')
-token=$(grep -E '^REVIEW-ID:' <<<"$msg" | tail -1 | awk '{print $2}')
-start="$ROOT/.claude/build-plans/$plan/run/reviews/$safe.json"
-anchor='{}'; [ ! -f "$start" ] || anchor=$(cat "$start")
 valid_verdict=$verdict; problem=''; event=$verdict
 case "$verdict" in
   '') problem="Your review has no 'Verdict:' line. Finish with Verdict: ACCEPT | ACCEPT-WITH-NOTES | REJECT."; event=no-verdict ;;
@@ -97,24 +97,24 @@ case "$verdict" in
 esac
 if [ -n "$problem" ]; then valid_verdict=INVALID; fi
 reason=$problem
-# Even well-formed legacy Markdown cannot authorize acceptance without a pinned start.
-if ! jq -e --arg p "$plan" --arg i "$mid" --arg token "$token" \
-  '.schema_version == 1 and .plan == $p and .id == $i and ($token | length > 0) and .review_id == $token' >/dev/null 2>&1 <<<"$anchor"; then
-  valid_verdict=INVALID; reason="missing or mismatched review-start token"
-elif [ "$(jq -r .tree_sha <<<"$anchor")" != "$(pv_tree_sha "$ROOT")" ] || \
-     [ "$(jq -r .checks_sha <<<"$anchor")" != "$(pv_sha256 < "$ROOT/.claude/build-plans/$plan/checks.json")" ]; then
-  valid_verdict=INVALID; reason='code or checks changed since review started'
+# Bind the review to the artifact as it stands when the reviewer stops, and only to a tree
+# whose primary builder result is a current PASS: that is the thing it was asked to judge.
+# Acceptance refuses the review once the tree or checks move on. A reviewer cannot fix
+# either problem, so they make the evidence INVALID without sending it back.
+dir="$ROOT/.claude/build-plans/$plan"
+tree=$(pv_tree_sha "$ROOT"); checks=$(pv_sha256 < "$dir/checks.json")
+if ! jq -e --arg p "$plan" --arg i "$mid" --arg t "$tree" --arg c "$checks" \
+  '.plan == $p and .id == $i and .status == "PASS" and .tree_sha == $t and .checks_sha == $c' "$dir/results/$safe.json" >/dev/null 2>&1; then
+  valid_verdict=INVALID; reason='the reviewed tree has no current passing builder checks; re-run them, then review again'
 fi
 [ -n "$agent_id" ] || { valid_verdict=INVALID; reason='missing reviewer identity'; }
-jq -nc --argjson a "$anchor" --arg p "$plan" --arg i "$mid" --arg v "$valid_verdict" \
-  --arg declared "$verdict" --arg agent "$agent_id" --arg reason "$reason" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  '{schema_version:1,plan:$p,id:$i,review_id:($a.review_id // ""),base_commit:($a.base_commit // ""),
-    tree_sha:($a.tree_sha // ""),checks_sha:($a.checks_sha // ""),agent_id:$agent,verdict:$v,
-    reported_verdict:$declared,reason:$reason,at:$at}' \
-  > "$ROOT/.claude/build-plans/$plan/results/$safe.review.json"
+# review_id names this one review, so an approval of it cannot carry over to a later one.
+jq -nc --arg p "$plan" --arg i "$mid" --arg rid "$(date +%s)-$$-$RANDOM" --arg b "$(git -C "$ROOT" rev-parse HEAD)" \
+  --arg t "$tree" --arg c "$checks" --arg v "$valid_verdict" --arg declared "$verdict" --arg agent "$agent_id" \
+  --arg reason "$reason" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  '{schema_version:1,plan:$p,id:$i,review_id:$rid,base_commit:$b,tree_sha:$t,checks_sha:$c,agent_id:$agent,
+    verdict:$v,reported_verdict:$declared,reason:$reason,at:$at}' \
+  > "$dir/results/$safe.review.json"
 log "$event" "review=$valid_verdict; $reason; results/$safe.review.md"
 [ -z "$problem" ] || block_once "$problem"
-# A legacy report may stop, but its machine evidence is INVALID. For a scheduled
-# review tell the reviewer about binding/staleness; a second stop remains INVALID.
-if [ "$valid_verdict" = INVALID ] && [ -f "$start" ]; then block_once "$reason. Ask the orchestrator to start a fresh review; never invent a REVIEW-ID."; fi
 exit 0
