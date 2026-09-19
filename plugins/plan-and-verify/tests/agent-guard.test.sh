@@ -158,4 +158,16 @@ printf 'ok' > "$REPO/hello.txt"
 (cd "$REPO" && CLAUDE_PROJECT_DIR="$REPO" bash "$HOOKS/accept-milestone.sh" demo 1.1 >/dev/null 2>&1)
 assert_path_absent "accepting the milestone removes its marker" "$OPEN/1.1.json"
 
+# --- a dead session's marker on the SAME milestone ------------------------------------
+# A session that dies mid-builder never stops its marker. The six-hour expiry has to apply
+# to a respawn of that milestone too, and the denial before then must say how to clear it.
+REPO=$(mk_repo demo); RUN="$REPO/.claude/build-plans/demo/run"; OPEN="$RUN/open"
+spawn "$B" "$PROMPT" >/dev/null
+out=$(spawn "$B" "$PROMPT")
+assert_eq "a live builder on the same milestone blocks a second one" deny "$(decision "$out")"
+assert_contains "that denial says how to clear a dead builder's marker" "clear-open" "$(reason "$out")"
+jq --argjson e $(( $(date +%s) - 25200 )) '.epoch=$e' "$OPEN/1.1.json" > "$OPEN/1.1.tmp" && mv "$OPEN/1.1.tmp" "$OPEN/1.1.json"
+out=$(spawn "$B" "$PROMPT")
+assert_eq "a same-milestone marker older than six hours does not block a respawn" allow "$(decision "$out")"
+
 finish

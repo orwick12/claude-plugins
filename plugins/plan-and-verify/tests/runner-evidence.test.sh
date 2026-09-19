@@ -11,4 +11,12 @@ jq '.milestones["1.1"].checks=[{name:"mutates",cmd:"echo changed > source.txt"}]
 CLAUDE_PROJECT_DIR="$R" bash "$HOOKS/run-checks.sh" demo 1.1 >/dev/null; RC=$?
 assert_eq 'source-mutating check fails' 1 "$RC"
 assert_eq 'source-mutating check never PASS' FAIL "$(jq -r .status "$D/results/1.1.json")"
+# The failure must say which file the run left behind, or it reads as flaky: a rerun passes
+# once the file exists, and the file is then committed with the milestone.
+R=$(mk_repo demo); D="$R/.claude/build-plans/demo"; printf ok > "$R/hello.txt"
+jq '.milestones["1.1"].checks=[{name:"writes coverage",cmd:"cat hello.txt; echo cov > coverage.out"}]' "$D/checks.json" > "$D/new"; mv "$D/new" "$D/checks.json"
+out=$(CLAUDE_PROJECT_DIR="$R" bash "$HOOKS/run-checks.sh" demo 1.1 2>&1)
+assert_eq 'a check that leaves a file behind fails' FAIL "$(jq -r .status "$D/results/1.1.json")"
+assert_contains 'the failure names the file the check left behind' 'coverage.out' "$out"
+assert_contains 'the recorded row names it too' 'coverage.out' "$(jq -r '.checks[-1].output_tail' "$D/results/1.1.json")"
 finish

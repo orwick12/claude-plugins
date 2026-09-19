@@ -5,9 +5,7 @@ R=$(mk_repo demo); TMPS="$TMPS $R"; D="$R/.claude/build-plans/demo"
 printf ok > "$R/hello.txt"
 CLAUDE_PROJECT_DIR="$R" bash "$HOOKS/run-checks.sh" demo 1.1 >/dev/null
 review() {
-  token=$(CLAUDE_PROJECT_DIR="$R" bash "$HOOKS/review-start.sh" demo 1.1)
   jq -nc --arg m "MILESTONE: demo/1.1
-REVIEW-ID: $token
 $1" '{agent_type:"milestone-reviewer",agent_id:"reviewer",last_assistant_message:$m,stop_hook_active:true}' |
     CLAUDE_PROJECT_DIR="$R" bash "$HOOKS/capture-review.sh" >/dev/null
   jq -r .verdict "$D/results/1.1.review.json"
