@@ -56,6 +56,9 @@ if ! command -v timeout >/dev/null 2>&1 && ! command -v gtimeout >/dev/null 2>&1
 fi
 SAFE_ID=$(printf '%s' "$MID" | tr ':/' '__')
 OUT="$DIR/results/$SAFE_ID.json"
+case "${3:-}" in '') ;; --observe) OUT="$DIR/results/$SAFE_ID.observed.json" ;; *) echo 'unknown runner option' >&2; exit 3 ;; esac
+before_tree=$(pv_tree_sha "$ROOT") || exit 3
+before_checks=$(pv_sha256 < "$CHECKS") || exit 3
 ROWS=$(mktemp)
 pass=0; fail=0
 
@@ -102,15 +105,22 @@ i=0; while [ "$i" -lt "$COUNT" ]; do
   i=$((i+1))
 done
 
+after_tree=$(pv_tree_sha "$ROOT") || exit 3
+after_checks=$(pv_sha256 < "$CHECKS") || exit 3
+if [ "$before_tree" != "$after_tree" ] || [ "$before_checks" != "$after_checks" ]; then
+  fail=$((fail+1))
+  echo 'FAIL  code or checks changed during verification; rerun after stabilizing the tree'
+  jq -nc '{name:"stable verification input",ok:false,exit:1,output_tail:"code or checks changed during verification"}' >> "$ROWS"
+fi
 status=$([ "$fail" -eq 0 ] && echo PASS || echo FAIL)
 # State fingerprints so a result can only authorise the exact code and checks it tested.
-checks_sha=$(pv_sha256 < "$CHECKS") || exit 3
-tree_sha=$(pv_tree_sha "$ROOT") || exit 3
+checks_sha=$before_checks
+tree_sha=$before_tree
 jq -s --arg plan "$PLAN" --arg id "$MID" --arg status "$status" \
       --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg sha "$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo none)" \
-      --arg run "$(date +%s)-$$" --arg csha "$checks_sha" --arg tsha "$tree_sha" \
+      --arg base "$(git -C "$ROOT" rev-parse HEAD)" --arg run "$(date +%s)-$$" --arg csha "$checks_sha" --arg tsha "$tree_sha" \
       --argjson pass "$pass" --argjson fail "$fail" \
-      '{plan:$plan,id:$id,status:$status,run_id:$run,ran_at:$ts,git:$sha,tree_sha:$tsha,checks_sha:$csha,pass:$pass,fail:$fail,checks:.}' "$ROWS" > "$OUT"
+      '{schema_version:1,plan:$plan,id:$id,status:$status,run_id:$run,ran_at:$ts,git:$sha,base_commit:$base,tree_sha:$tsha,checks_sha:$csha,pass:$pass,fail:$fail,checks:.}' "$ROWS" > "$OUT"
 rm -f "$ROWS"
 
 echo "== $status: $pass passed, $fail failed  (results: ${OUT#$ROOT/}) =="

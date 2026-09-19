@@ -156,13 +156,42 @@ pv_log_event() {
   jq -nc --argjson o "$obj" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{ts:$ts} + $o' >> "$d/$file.jsonl" 2>/dev/null || true
 }
 
-# Fingerprint of the working tree (diff vs HEAD + untracked files), excluding results dirs.
+# pv_source_tree ROOT [REVISION]: proposed tree, or the clean supplied revision.
+# Uses a private index. Evidence is deliberately
+# excluded ONLY beneath plugin plan directories, never application results/ directories.
+# Removing excluded tracked entries also prevents prior evidence changing source identity.
+pv_source_tree() (
+  root="$1"
+  tmp=$(mktemp) || exit 1
+  trap 'rm -f "$tmp" "$tmp.lock"' EXIT
+  export GIT_INDEX_FILE="$tmp"
+  git -C "$root" read-tree "${2:-HEAD}" || exit 1
+  if [ $# -eq 1 ]; then git -C "$root" add -A -- . ':!.claude/build-plans/*/results/**' ':!.claude/build-plans/*/run/**' || exit 1; fi
+  git -C "$root" ls-files -z -- '.claude/build-plans/*/results/**' '.claude/build-plans/*/run/**' |
+    git -C "$root" update-index --force-remove -z --stdin || exit 1
+  git -C "$root" write-tree
+)
+
+# A code identity includes the base commit as well as the complete proposed tree.
 pv_tree_sha() {
-  local root="$1"
-  ( git -C "$root" diff HEAD --binary -- . ':!*/results/*' 2>/dev/null
-    git -C "$root" ls-files --others --exclude-standard 2>/dev/null | grep -v '/results/' | LC_ALL=C sort |
-      while IFS= read -r f; do printf '%s\n' "$f"; cat "$root/$f" 2>/dev/null; done
-  ) | pv_sha256
+  local base tree
+  base=$(git -C "$1" rev-parse HEAD) || return 1
+  tree=$(pv_source_tree "$1") || return 1
+  printf '%s\n%s\n' "$base" "$tree" | pv_sha256
+}
+
+# Identity of a clean accepted revision, independent of the current worktree.
+pv_committed_sha() {
+  local base tree
+  base=$(git -C "$1" rev-parse "$2^{commit}") || return 1
+  tree=$(pv_source_tree "$1" "$base") || return 1
+  printf '%s\n%s\n' "$base" "$tree" | pv_sha256
+}
+
+# Validate CLI identifiers before using them in paths or refs.
+pv_valid_ref() {
+  [ -n "${1:-}" ] && [ "$1" != . ] && [ "$1" != .. ] || return 1
+  case "$1" in *[!A-Za-z0-9._:-]*|*..*) return 1 ;; esac
 }
 
 # One field of one milestone block in plan.md: <plan.md> <id> <field>. The block ends at the

@@ -26,7 +26,7 @@ goal: <one sentence>
 scope: <paths>
 out-of-scope: <paths>
 depends-on: <ids or none>
-parallel-group: none   (opt-in only; see SKILL.md field rules. The spawn guard lets builders run at the same time
+parallel-group: none   (keep none for benchmark/new sequential plans; legacy opt-in only; see SKILL.md field rules. The spawn guard lets builders run at the same time
                         only for members of the same `parallel-group`; each member's checks stay scoped to its own
                         directories, and the group is accepted in one call after every member's checks are re-run)
 model: sonnet | opus
@@ -35,7 +35,7 @@ review: 0 | 1 | 2
 irreversible: no | yes   (yes = deletes data, migrates a schema, rotates a secret, touches payments, or
                           changes anything outside this repo. The only thing that still pauses an autonomous run at tier 2.)
 checks: <check names from checks.json>
-status: TODO | DONE | ABANDONED <why>   (DONE is written by accept-milestone.sh; the commit is `git log --grep '[<slug> <id>]'`)
+status: TODO | DONE | ABANDONED <why>   (DONE is written by accept-milestone.sh; completion is queried with `run-state.sh accepted <slug> <id>`)
 context: |
   <The full work order. Include: the goal again, the exact files, interfaces
   to match (paste signatures), the project commands it should use, decisions

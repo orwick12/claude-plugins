@@ -14,10 +14,67 @@
 #                     "the hook never ran"
 set -u
 HOOKS="$(cd "$(dirname "$0")" && pwd)"
-. "$HOOKS/lib.sh"
+. "$HOOKS/evidence.sh"
 cmd="${1:-}"
 
 case "$cmd" in
+  accepted)
+    plan="${2:-}"; id="${3:-}"
+    pv_valid_ref "$plan" && pv_valid_ref "$id" || exit 3
+    pv_accepted "$(pv_root)" "$plan" "$id"; exit $? ;;
+
+  status)
+    plan="${2:-}"; id="${3:-}"
+    pv_valid_ref "$plan" && pv_valid_ref "$id" || exit 3
+    ROOT=$(pv_root); dir="$ROOT/.claude/build-plans/$plan"; P="$dir/plan.md"
+    [ -f "$P" ] && [ -f "$dir/checks.json" ] || exit 3
+    safe=$(printf '%s' "$id" | tr ':/' '__')
+    tier=$(pv_milestone_field "$P" "$id" review | awk '{print $1}')
+    pending=$(pv_pending_dependencies "$ROOT" "$plan" "$id" | jq -Rsc 'split("\n") | map(select(length > 0))')
+    state=pending; action=build; reason='no current check evidence'
+    checks_status=MISSING; check_fresh=false; verdict=MISSING; review_fresh=false; bound=false
+    tree=$(pv_tree_sha "$ROOT") || exit 3
+    csha=$(pv_sha256 < "$dir/checks.json") || exit 3
+    if [ -f "$dir/results/$safe.json" ]; then
+      checks_status=$(jq -r '.status // "INVALID"' "$dir/results/$safe.json" 2>/dev/null) || checks_status=INVALID
+      jq -e --arg t "$tree" --arg c "$csha" '.tree_sha == $t and .checks_sha == $c' "$dir/results/$safe.json" >/dev/null 2>&1 && check_fresh=true
+    fi
+    if [ -f "$dir/results/$safe.review.json" ]; then
+      verdict=$(jq -r '.verdict // "INVALID"' "$dir/results/$safe.review.json" 2>/dev/null) || verdict=INVALID
+      jq -e --arg t "$tree" --arg c "$csha" '.tree_sha == $t and .checks_sha == $c' "$dir/results/$safe.review.json" >/dev/null 2>&1 && review_fresh=true
+      pv_review_bound "$ROOT" "$plan" "$id" && bound=true
+    fi
+    if pv_accepted "$ROOT" "$plan" "$id" >/dev/null; then
+      state=accepted; action=next; reason='committed acceptance'
+    elif [ "$(jq length <<<"$pending")" -gt 0 ]; then
+      state=blocked; action=dependencies; reason='unaccepted dependencies'
+    elif [ "$checks_status" = BLOCKED ]; then
+      state=blocked; action=clarify; reason='builder reports a decision is needed'
+    elif [ "$check_fresh" = true ] && [ "$checks_status" = FAIL ]; then
+      state=failed; action=repair; reason='checks failed'
+    elif [ "$check_fresh" != true ]; then
+      action=verify; reason='checks missing or stale'
+    elif [ "$checks_status" != PASS ]; then
+      state=blocked; action=inspect; reason='invalid check evidence'
+    elif [ "$tier" = 0 ]; then
+      state=verified; action=accept; reason='checks current; acceptance revalidates policy and gates'
+    elif [ "$review_fresh" = true ] && [ "$verdict" = REJECT ]; then
+      state=rejected; action=repair; reason='review rejected the change'
+    elif [ "$review_fresh" != true ] || [ "$bound" != true ]; then
+      state=review; action=review; reason='required approving review missing, invalid or stale'
+    elif pv_human_required "$P" "$id" && ! pv_approval_valid "$dir" "$id"; then
+      state=blocked; action=approval; reason='explicit user approval required'
+    else
+      state=verified; action=accept; reason='checks and review current; acceptance revalidates policy and gates'
+    fi
+    case "$tier" in 0|1|2) ;; *) state=blocked; action=plan; reason='missing review policy' ;; esac
+    # Never include raw command output, reports or unbounded history in this summary.
+    jq -nc --arg p "$plan" --arg i "$id" --arg state "$state" --arg a "$action" --arg why "$reason" \
+      --arg cs "${checks_status:0:32}" --arg v "${verdict:0:32}" --argjson cf "$check_fresh" \
+      --argjson rf "$review_fresh" --argjson bound "$bound" --argjson pending "$pending" \
+      '{plan:$p,id:$i,state:$state,next_action:$a,reason:$why,checks:{status:$cs,fresh:$cf},
+        review:{verdict:$v,fresh:$rf,bound:$bound},dependencies:{ready:($pending|length==0),pending:$pending[:20],count:($pending|length)}}' ;;
+
   init)
     plan="${2:-}"; [ -n "$plan" ] || { echo "usage: run-state.sh init <plan>" >&2; exit 3; }
     ROOT=$(pv_root)
@@ -82,7 +139,7 @@ case "$cmd" in
     [ -n "$tag" ] && echo "phases passed: $tag"
     next=""
     for id in $(grep -oE '^### Milestone [A-Za-z0-9._:-]+' "$P" | awk '{print $3}'); do
-      c=$(git -C "$ROOT" log --oneline --grep "\[$plan $id\]" 2>/dev/null | head -1)
+      c=$(pv_accepted "$ROOT" "$plan" "$id")
       if [ -n "$c" ]; then printf '  %-6s accepted  %s\n' "$id" "$c"
       else printf '  %-6s pending\n' "$id"; [ -n "$next" ] || next=$id
       fi
@@ -102,7 +159,7 @@ EOF
     d="$dir/run/decisions.jsonl"
     if [ -f "$d" ]; then
       echo "last decisions:"
-      tail -20 "$d" | jq -r '"  " + .ts + "  " + (.event // "?") + " " + (.id // "-") +
+      tail -20 "$d" | jq -r '"  " + .ts + "  " + (.actor // .event // "?") + " " + (.id // "-") +
                              (if .class then " [class " + .class + "]" else "" end) +
                              "  " + (.decision // .trigger // "")' 2>/dev/null
     fi
@@ -304,5 +361,5 @@ EOF
     [ "$fail" -eq 0 ] || exit 2
     ;;
 
-  *) sed -n '3,9p' "$0"; exit 3 ;;
+  *) echo 'usage: run-state.sh accepted PLAN ID | status PLAN ID | brief PLAN | milestone PLAN ID | preflight PLAN | lint-checks PLAN | init PLAN | log PLAN JSON | clear-open PLAN [ID] | record | post'; exit 3 ;;
 esac

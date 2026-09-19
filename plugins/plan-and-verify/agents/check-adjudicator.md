@@ -15,7 +15,7 @@ You receive: the plan slug, the milestone id, the failing check (name, command, 
 
 Do this, in order:
 
-1. Run the failing check yourself: `bash "$PV_HOOKS/run-checks.sh" <plan> <id>`. Read the real output, not the builder's account of it.
+1. Run the failing check yourself: `bash "$PV_HOOKS/run-checks.sh" <plan> <id> --observe`. Read the real output, not the builder's account of it.
 2. Read the milestone's own text: `bash "$PV_HOOKS/run-state.sh" milestone <plan> <id>`, and the plan's `## Decisions already made` section. Read the code the check exercises.
 3. Decide, and be hard to persuade. The default answer is CODE-WRONG. A check is only wrong when the plan itself says something the check contradicts — not when the check is merely strict, awkward, or inconvenient.
 4. If you say CHECK-WRONG you must quote the passage that contradicts it, **verbatim**, in the `cites:` line. That quote is checked against `plan.md` with a literal string match before anything is changed: invent or paraphrase it and your verdict is discarded.

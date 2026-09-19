@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # capture-review.sh — Stop hook for the milestone-reviewer subagents.
 #
-# An unattended run reads the reviewer's `Verdict:` token and nothing else, and its
-# findings used to live only in a hand-back message no one stored. So this hook keeps the
+# Acceptance reads structured, artifact-bound review evidence; raw Markdown is
+# diagnostic. Findings used to live only in a hand-back message. This hook keeps the
 # review next to the milestone's results and holds the reviewer to the severity rule in
 # its own contract: a [med] or [high] finding is a REJECT (F45).
 #   - review captured                          -> results/<id>.review.md, verdict logged
@@ -19,7 +19,7 @@
 
 set -u
 HOOKS="$(cd "$(dirname "$0")" && pwd)"
-. "$HOOKS/lib.sh"
+. "$HOOKS/evidence.sh"
 input=$(cat)
 pv_is_reviewer "$(jq -r '.agent_type // ""' <<<"$input")" || exit 0
 [ -n "${CLAUDE_PROJECT_DIR:-}" ] || CLAUDE_PROJECT_DIR=$(jq -r '.cwd // "."' <<<"$input")
@@ -59,19 +59,62 @@ log() {
 safe=$(printf '%s' "$mid" | tr ':/' '__')
 pv_write_report "$ROOT" "$plan" "$mid" "$src" "$agent_id" "$msg" review.md
 
-verdict=$(grep -E '^Verdict:' <<<"$msg" | tail -1 | sed -E 's/^Verdict:[[:space:]]*//' | awk '{print $1}')
-if [ -z "$verdict" ]; then
-  log no-verdict "review has no Verdict: line"
-  block_once "Your review has no 'Verdict:' line. An unattended run reads that token and nothing else to decide what happens to this milestone, so finish with 'Verdict: ACCEPT | ACCEPT-WITH-NOTES | REJECT' as the last line of your report."
+# Raw Markdown is diagnostic only. Acceptance consumes the validated JSON below.
+verdict=$(grep -E '^Verdict:' <<<"$msg" | tail -1 | sed -E 's/^Verdict:[[:space:]]*//')
+token=$(grep -E '^REVIEW-ID:' <<<"$msg" | tail -1 | awk '{print $2}')
+start="$ROOT/.claude/build-plans/$plan/run/reviews/$safe.json"
+anchor='{}'; [ ! -f "$start" ] || anchor=$(cat "$start")
+valid_verdict=$verdict; problem=''; event=$verdict
+case "$verdict" in
+  '') problem="Your review has no 'Verdict:' line. Finish with Verdict: ACCEPT | ACCEPT-WITH-NOTES | REJECT."; event=no-verdict ;;
+  ACCEPT|ACCEPT-WITH-NOTES|REJECT) ;;
+  *) problem='Unknown verdict; use exactly ACCEPT, ACCEPT-WITH-NOTES or REJECT.'; event=invalid-verdict ;;
+esac
+if [ -z "$problem" ] && [ "$(printf '%s\n' "$msg" | sed '/^[[:space:]]*$/d' | tail -1)" != "Verdict: $verdict" ]; then
+  problem='Verdict: must be the last nonempty line.'; event=invalid-verdict
 fi
-
 case "$verdict" in
   ACCEPT|ACCEPT-WITH-NOTES)
     if grep -qiE '^[[:space:]]*-[[:space:]]*\[(med|high)\]' <<<"$msg"; then
-      log verdict-mismatch "verdict $verdict alongside a med or high finding"
-      block_once "Your report has a med/high finding but the verdict is $verdict. A med or high finding is a REJECT. Either change the verdict to REJECT, or downgrade the finding to [low] with one line saying why it does not block acceptance, then finish with Verdict: as the last line."
+      problem="Your report has a med/high finding but the verdict is $verdict. A med or high finding is a REJECT. Correct the verdict, or justify a [low] downgrade."
+      event=verdict-mismatch
     fi ;;
 esac
-
-log "$verdict" "review stored at results/$safe.review.md"
+if [ -z "$problem" ] && [ "$(grep -c '^Verdict:' <<<"$msg")" != 1 ]; then
+  problem='Report must have exactly one Verdict: line.'; event=invalid-verdict
+fi
+case "$verdict" in
+  ACCEPT|ACCEPT-WITH-NOTES)
+    if [ -z "$problem" ] && grep -qE '^Checks:[[:space:]]*(FAIL|BLOCKED)' <<<"$msg"; then
+      problem='An approving verdict contradicts failed checks.'; event=verdict-mismatch
+    fi
+    if [ -z "$problem" ] && grep -E '^[[:space:]]*-[[:space:]]' <<<"$msg" | grep -qvE '^[[:space:]]*-[[:space:]]*\[(low|med|high)\]'; then
+      problem='Every finding must have an explicit low, med or high grade.'; event=invalid-verdict
+    fi
+    if [ -z "$problem" ] && [ "$verdict" = ACCEPT ] && grep -qE '^[[:space:]]*-[[:space:]]*\[low\]' <<<"$msg"; then
+      problem='Use ACCEPT-WITH-NOTES for low findings; ACCEPT means no findings.'; event=verdict-mismatch
+    fi ;;
+esac
+if [ -n "$problem" ]; then valid_verdict=INVALID; fi
+reason=$problem
+# Even well-formed legacy Markdown cannot authorize acceptance without a pinned start.
+if ! jq -e --arg p "$plan" --arg i "$mid" --arg token "$token" \
+  '.schema_version == 1 and .plan == $p and .id == $i and ($token | length > 0) and .review_id == $token' >/dev/null 2>&1 <<<"$anchor"; then
+  valid_verdict=INVALID; reason="missing or mismatched review-start token"
+elif [ "$(jq -r .tree_sha <<<"$anchor")" != "$(pv_tree_sha "$ROOT")" ] || \
+     [ "$(jq -r .checks_sha <<<"$anchor")" != "$(pv_sha256 < "$ROOT/.claude/build-plans/$plan/checks.json")" ]; then
+  valid_verdict=INVALID; reason='code or checks changed since review started'
+fi
+[ -n "$agent_id" ] || { valid_verdict=INVALID; reason='missing reviewer identity'; }
+jq -nc --argjson a "$anchor" --arg p "$plan" --arg i "$mid" --arg v "$valid_verdict" \
+  --arg declared "$verdict" --arg agent "$agent_id" --arg reason "$reason" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  '{schema_version:1,plan:$p,id:$i,review_id:($a.review_id // ""),base_commit:($a.base_commit // ""),
+    tree_sha:($a.tree_sha // ""),checks_sha:($a.checks_sha // ""),agent_id:$agent,verdict:$v,
+    reported_verdict:$declared,reason:$reason,at:$at}' \
+  > "$ROOT/.claude/build-plans/$plan/results/$safe.review.json"
+log "$event" "review=$valid_verdict; $reason; results/$safe.review.md"
+[ -z "$problem" ] || block_once "$problem"
+# A legacy report may stop, but its machine evidence is INVALID. For a scheduled
+# review tell the reviewer about binding/staleness; a second stop remains INVALID.
+if [ "$valid_verdict" = INVALID ] && [ -f "$start" ]; then block_once "$reason. Ask the orchestrator to start a fresh review; never invent a REVIEW-ID."; fi
 exit 0

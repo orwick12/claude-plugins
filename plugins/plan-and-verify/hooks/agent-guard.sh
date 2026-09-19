@@ -23,7 +23,7 @@
 # after six hours, and 'run-state.sh clear-open <plan> [<id>]' removes it before that.
 set -u
 HOOKS="$(cd "$(dirname "$0")" && pwd)"
-. "$HOOKS/lib.sh"
+. "$HOOKS/state.sh"
 input=$(cat)
 
 # --- SubagentStart: the only event a RESUMED builder raises ---------------------------
@@ -96,24 +96,31 @@ deny() {
 mode=$(jq -r '.permission_mode // ""' <<<"$input")
 [ "$mode" != "plan" ] || deny "The session is in plan mode: finish planning and approve the plan before any builder runs."
 
-if git -C "$ROOT" log --oneline --grep "\[$plan $mid\]" 2>/dev/null | grep -q .; then
+if pv_accepted "$ROOT" "$plan" "$mid" >/dev/null; then
   deny "Milestone $mid is already accepted (its milestone commit exists). Move to the next milestone; if it must be rebuilt, say so and revert the commit first."
 fi
 
+pending=$(pv_pending_dependencies "$ROOT" "$plan" "$mid")
+[ -z "$pending" ] || deny "Milestone $mid has unaccepted dependencies: $pending"
 PLANMD="$ROOT/.claude/build-plans/$plan/plan.md"
 rundir=$(pv_run_dir "$ROOT" "$plan")
 mygroup=$(pv_parallel_group "$PLANMD" "$mid")
 now=$(date +%s)
-for m in "$rundir"/open/*.json; do
+for m in "$ROOT"/.claude/build-plans/*/run/open/*.json; do
   [ -f "$m" ] || continue
   oid=$(jq -r '.id // ""' "$m" 2>/dev/null)
-  [ -n "$oid" ] && [ "$oid" != "$mid" ] || continue      # same milestone: an escalation
+  [ -n "$oid" ] || continue
+  rel=${m#"$ROOT"/.claude/build-plans/}; otherplan=${rel%%/*}
+  if [ "$otherplan" = "$plan" ] && [ "$oid" = "$mid" ]; then
+    [ "$(jq -r '.state // "open"' "$m")" = stopped ] && continue
+    deny "A builder is still open on milestone $mid. Wait for completion before escalating."
+  fi
   oat=$(jq -r '.epoch // 0' "$m" 2>/dev/null)
   case "$oat" in ''|*[!0-9]*) oat=0 ;; esac
   [ $((now - oat)) -lt 21600 ] || continue               # six hours: a dead session's marker
   # Members of one parallel group are the one case where two builders share the tree: the
   # plan says they own disjoint directories, and the group is accepted in one call.
-  if [ -n "$mygroup" ] && [ "$mygroup" = "$(pv_parallel_group "$PLANMD" "$oid")" ]; then continue; fi
+  if [ "$otherplan" = "$plan" ] && [ -n "$mygroup" ] && [ "$mygroup" = "$(pv_parallel_group "$PLANMD" "$oid")" ]; then continue; fi
   if [ "$(jq -r '.state // "open"' "$m" 2>/dev/null)" = "stopped" ]; then
     deny "Milestone $oid has a builder that stopped but is not accepted yet, so this tree is still mid-milestone. Finish $oid — read its results file, review it, accept it — before spawning $mid. Two builders may only run together as members of the same parallel-group."
   fi

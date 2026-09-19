@@ -5,7 +5,7 @@
 # snapshot.sh restore <ref>                       -> DESTRUCTIVE: make the tree match <ref>
 #
 # A snapshot is a commit object of the whole working tree (tracked changes and
-# untracked files, minus ignored files and results/) stored under
+# untracked files, minus ignored files and plugin plan evidence) stored under
 # refs/pv/snapshots/<plan>/<id>/<n>-<label>. It is built through a temporary
 # index, so it never touches the branch, the real index, the working tree or
 # the review diff. It is the undo for a builder's uncommitted work.
@@ -25,9 +25,7 @@ case "$cmd" in
     git for-each-ref --sort=creatordate --format='%(refname:short)  %(creatordate:iso-strict)  %(subject)' "refs/pv/snapshots/$plan/${id:+$id/}" ;;
   diff)
     ref="${2:-}"; [ -n "$ref" ] || { echo "usage: snapshot.sh diff <ref>" >&2; exit 3; }
-    tmp=$(mktemp); cp .git/index "$tmp" 2>/dev/null || true
-    GIT_INDEX_FILE="$tmp" git add -A -- . ':!*/results/*' 2>/dev/null
-    now=$(GIT_INDEX_FILE="$tmp" git write-tree); rm -f "$tmp"
+    now=$(pv_source_tree "$ROOT") || exit 3
     git diff --stat "$ref" "$now"; echo; git diff "$ref" "$now" ;;
   restore)
     ref="${2:-}"; [ -n "$ref" ] || { echo "usage: snapshot.sh restore <ref>" >&2; exit 3; }
@@ -37,7 +35,8 @@ case "$cmd" in
     # snapshots, so park them and put them back afterwards.
     park=$(mktemp -d)
     for d in .claude/build-plans/*/results; do [ -d "$d" ] && mkdir -p "$park/$d" && cp -R "$d/." "$park/$d/"; done
-    git ls-files --others --exclude-standard | grep -v '/results/' | while IFS= read -r f; do rm -f -- "$f"; done
+    git ls-files -z --others --exclude-standard -- . ':!.claude/build-plans/*/results/**' ':!.claude/build-plans/*/run/**' |
+      while IFS= read -r -d '' f; do rm -f -- "$f"; done
     git read-tree --reset -u "$ref" || { echo "restore failed" >&2; exit 1; }
     git reset -q  # index back to HEAD so the review diff is intact
     (cd "$park" && find . -type d -name results) | while IFS= read -r d; do mkdir -p "$d" && cp -R "$park/$d/." "$d/"; done
@@ -47,9 +46,7 @@ case "$cmd" in
   *)
     plan="$cmd"; id="${2:-}"; label="${3:-manual}"
     [ -n "$id" ] || { echo "usage: snapshot.sh <plan> <id> [label]" >&2; exit 3; }
-    tmp=$(mktemp); cp .git/index "$tmp" 2>/dev/null || true
-    GIT_INDEX_FILE="$tmp" git add -A -- . ':!*/results/*' 2>/dev/null
-    tree=$(GIT_INDEX_FILE="$tmp" git write-tree); rm -f "$tmp"
+    tree=$(pv_source_tree "$ROOT") || exit 3
     base="refs/pv/snapshots/$plan/$id"
     n=$(git for-each-ref --format='%(refname)' "$base/" | wc -l | tr -d ' '); n=$((n+1))
     label=$(printf '%s' "$label" | tr -c 'A-Za-z0-9_-' '_')

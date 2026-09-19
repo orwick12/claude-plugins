@@ -8,11 +8,11 @@ An autonomous run does the same work as a supervised one and reaches the same ga
 
 | Question | Answer comes from | Never from |
 |---|---|---|
-| Is this milestone done? | a milestone commit: `git log --grep '[<slug> <id>]'` | `status:` in plan.md, a builder saying DONE |
+| Is this milestone done? | `run-state.sh accepted <slug> <id>` (committed evidence, legacy-aware) | `status:` in plan.md, a builder saying DONE |
 | Did the checks pass? | `results/<id>.json`, and only while its `tree_sha` still matches the tree | the builder's pasted check output |
 | Did enforcement run? | a `hook:verify-milestone` line in `run/hook-events.jsonl` | the absence of a complaint |
 | What did the builder report? | `results/<id>.report.md`, written by the hook | the hand-back message, which is stale after any block |
-| What did the reviewer find? | `results/<id>.review.md`, written by the hook | the verdict token on its own |
+| What did the reviewer find? | `run-state.sh status <slug> <id>`; read `review.md` only for details | raw Markdown verdict without current structured evidence |
 | What happened earlier in this run? | `run/decisions.jsonl` via `run-state.sh brief <slug>` | your own memory of it |
 
 The `pv:` line is injected at spawn (Claude Code's Agent tool is asynchronous, so PostToolUse[Agent] fires before the builder has done anything). It is spawn-time and carries no verdict; it says so and names the files to check. The truth is `results/<id>.json`, read AFTER the builder's completion notification, plus the `hook:verify-milestone` heartbeat for that stop.
@@ -21,10 +21,10 @@ The `pv:` line is injected at spawn (Claude Code's Agent tool is asynchronous, s
 
 1. `bash "$PV_HOOKS/run-state.sh" brief <slug>` — where the plan stands. On the first milestone of a session also run `preflight <slug>` and act on its verdict (see below).
 2. `bash "$PV_HOOKS/run-state.sh" milestone <slug> <id>` — the work order, on its own.
-3. `needs-planning: yes` → the planning fork first, then commit its sub-plan as `plan(<slug>): sub-plan for <id>`.
+3. `needs-planning: yes` → the narrow `milestone-planner`, after dependencies are accepted, then commit its sub-plan as `plan(<slug>): sub-plan for <id>`.
 4. `snapshot.sh <slug> <id> spawn`, then spawn exactly one builder with the work order.
-5. When it returns, read the results file. `PASS` → review tier decides; `FAIL`/`BLOCKED`/missing → classify below.
-6. Tier 1, or tier 2 with `irreversible: no` → reviewer; `Verdict:` is the only line that decides: `ACCEPT` and `ACCEPT-WITH-NOTES` go on to step 7, `REJECT` does not. Read its findings in `results/<id>.review.md` and keep every note for the end report. Tier 2 with `irreversible: yes` → stop and show the user (class c).
+5. After completion, read `run-state.sh status <slug> <id>`; inspect detailed evidence only when the summary needs explanation. `PASS` → review tier decides; `FAIL`/`BLOCKED`/missing → classify below.
+6. Tier 1, or tier 2 with `irreversible: no` → call `review-start.sh <slug> <id>` and pass its token to the reviewer as REVIEW-ID. ACCEPT/ACCEPT-WITH-NOTES must be current, bound structured evidence; REJECT means repair, INVALID means obtain a valid new review. Read `results/<id>.review.md` for findings and retain notes by path. Tier 2 with `irreversible: yes` → stop for explicit approval (class c), then record it with `approve-milestone.sh <slug> <id> --by <name> --reason <approval-reference>`. Never manufacture a user's approval.
 7. `accept-milestone.sh <slug> <id>`. For a parallel group, re-run every member's checks after the last member finishes — each member's results went stale while its siblings worked — then accept the whole group in one call. On refusal, do what the message says once; a second refusal of the same kind is class (e).
 8. Log every decision as you make it: `run-state.sh log <slug> '<json>'`.
 
@@ -56,12 +56,12 @@ Anything not in this table: carry on and log a `note`. Stopping six times a phas
 
 ## Deciding that a check is wrong
 
-Never decide this yourself: you have been reading this milestone's code all along and you are the last one who should judge whether its checks are fair.
+Use an independent adjudicator for this exception. The orchestrator should not have loaded implementation details during routine decisions.
 
 1. Spawn `check-adjudicator` (read-only, opus) with the failing check, the milestone text and the builder's report.
 2. Take `verdict:` only when `cites:` is a literal passage of `plan.md`. Verify it: `grep -F -q -- "<the cited text>" .claude/build-plans/<slug>/plan.md`. No match means AMBIGUOUS, whatever the agent said.
 3. Only these change without a human: a broken command, an expectation the plan contradicts, or setup the plan puts in a later milestone. Never delete a check, drop below two checks or the one behaviour check, weaken an assertion the goal names, or touch a `gates` entry.
-4. Commit the edit on its own as `plan(<slug>): fix check ...`, re-run the checks (the fix changed `checks.json`, so the previous PASS is stale), then accept.
+4. Commit the edit on its own as `plan(<slug>): fix check ...`, re-run the checks (the fix changed `checks.json`, so the previous PASS is stale), then start a fresh review where required before accepting.
 
 ## Stopping
 
@@ -99,8 +99,12 @@ Then stop. Do not start the next milestone.
 Everything above is rebuilt from the repository: `run-state.sh brief <slug>` plus `git log`. Two things cannot be:
 
 - **A stopped builder's reasoning.** Resuming "the same builder" only works inside one session. In a new session it is a fresh spawn carrying the findings text, it loses the warm cache, and it still costs a builder run from the budget.
-- **Whether a human really reviewed a tier-2 pause.** If the user says continue, log it as `actor: human`; it is their word, recorded, not proof.
+- **Whether a human really reviewed a tier-2 pause.** approve-milestone.sh records the explicit decision with artifact/review identity. It is a record of their word, not authentication. Never infer approval from a previous artifact or an agent message.
 
 ## The end report
 
 When the last gate passes, report: the branch, the commit count, the tags, then — in this order — every check fix with its citation, every self-correction by class, every ACCEPT-WITH-NOTES note, escalations to opus, repair milestones added, re-locks, and budgets consumed. `run-state.sh brief` gives you all of it. Say plainly what was never verified by a human.
+
+## Decision log and context budget
+
+Use `{"actor":"orchestrator","event":"decision","id":"1.2","decision":"resume builder","reason":"review rejected error handling"}`. For a human decision use actor human and record the actual decision/reference. Keep values short; detailed evidence stays in results files. `brief` is for session/phase boundaries; `status` is for each routine judgment. Never load benchmark evaluator notes or the full historical findings register into the executor.
